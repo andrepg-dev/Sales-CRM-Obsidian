@@ -1,6 +1,6 @@
 import type { CRMView } from "../view";
 import { div, span, button, initials } from "../util/dom";
-import { shortDate, relFuture } from "../util/dates";
+import { shortDate } from "../util/dates";
 import {
 	STATUS_META,
 	STATUS_ORDER,
@@ -82,18 +82,6 @@ export function renderDetail(root: HTMLElement, view: CRMView, contactId: string
 	// side panel ---------------------------------------------------------
 	const side = div(grid, "scrm-panel scrm-side");
 
-	// next step
-	const nextBox = div(side, "scrm-side-block");
-	div(nextBox, "scrm-panel-label", "NEXT STEP");
-	if (c.nextStepText) {
-		const nb = div(nextBox, "scrm-side-value");
-		nb.appendText(c.nextStepText);
-		const when = relFuture(c.nextStepDate);
-		if (when) span(nb, "scrm-next-when", ` · ${when}`);
-	} else {
-		div(nextBox, "scrm-muted", "No next step set.");
-	}
-
 	// type + coverage
 	const type = store.getType(c.typeId);
 	const typeBox = div(side, "scrm-side-block");
@@ -143,30 +131,81 @@ function renderConversation(
 	num: number,
 ): void {
 	const entry = div(parent, "scrm-tl-entry");
+	entry.addClass("is-collapsed");
 	const rail = div(entry, "scrm-tl-rail");
 	if (cv.outcome === "advancing") rail.addClass("is-advancing");
 	const body = div(entry, "scrm-tl-body");
 
 	const head = div(body, "scrm-tl-head");
+	const channelLabel = CHANNEL_META[cv.channel]?.label ?? cv.channel;
 	div(
 		head,
 		"scrm-mono-mini scrm-accent",
-		`#${num} · ${shortDate(cv.date).toUpperCase()} · ${CHANNEL_META[cv.channel].label.toUpperCase()}`,
+		`#${num} · ${shortDate(cv.date).toUpperCase()} · ${channelLabel.toUpperCase()}`,
 	);
+	if (cv.conversationUrl) {
+		const topLink = span(head, "scrm-chip scrm-chip-link scrm-tl-head-link", "open link");
+		topLink.addEventListener("click", (ev) => {
+			ev.stopPropagation();
+			window.open(cv.conversationUrl, "_blank");
+		});
+	}
+	span(head, "scrm-mono-mini scrm-muted scrm-tl-openhint", "open details");
 	const del = span(head, "scrm-tl-del scrm-link", "✕");
 	del.setAttr("aria-label", "Delete conversation");
-	del.addEventListener("click", () => {
+	del.addEventListener("click", (ev) => {
+		ev.stopPropagation();
 		if (confirm("Delete this conversation?")) view.store.deleteConversation(cv.id);
 	});
 
+	const detail = div(body, "scrm-tl-detail");
+	detail.addEventListener("click", (ev) => ev.stopPropagation());
+
+	const linkRow = div(detail, "scrm-tl-linkrow");
+	const linkField = div(linkRow, "scrm-tl-linkfield");
+	div(linkField, "scrm-tl-detail-label", "Conversation link");
+	const linkInput = linkField.createEl("input", {
+		cls: "scrm-input scrm-tl-linkinput",
+		attr: {
+			type: "url",
+			placeholder: conversationLinkPlaceholder(cv.channel),
+		},
+	});
+	linkInput.value = cv.conversationUrl;
+	linkInput.addEventListener("change", () => {
+		view.store.updateConversation(cv.id, { conversationUrl: linkInput.value.trim() });
+	});
+	if (cv.conversationUrl) {
+		const open = button(linkRow, "scrm-btn scrm-btn-ghost", "open", () => {
+			window.open(cv.conversationUrl, "_blank");
+		});
+		void open;
+	}
+
 	if (cv.facts.trim()) {
-		const facts = div(body, "scrm-tl-facts");
+		const facts = div(detail, "scrm-tl-facts");
+		div(facts, "scrm-tl-detail-label", "Facts");
 		cv.facts.split("\n").forEach((line) => {
 			if (line.trim()) div(facts, "scrm-tl-fact", line.trim());
 		});
 	}
 
-	const chips = div(body, "scrm-tl-chips");
+	if (cv.questionAnswers.length) {
+		const contact = view.store.getContact(cv.contactId);
+		const type = view.store.getType(contact?.typeId ?? null);
+		const qwrap = div(detail, "scrm-tl-qanswers");
+		div(qwrap, "scrm-tl-detail-label", "Questions answered");
+		for (const qa of cv.questionAnswers) {
+			const question = type?.questions.find((q) => q.id === qa.questionId);
+			span(
+				qwrap,
+				`scrm-chip scrm-qanswer-${qa.state}`,
+				`${question?.text ?? qa.questionId}: ${qa.state}`,
+			);
+		}
+	}
+
+	const chips = div(detail, "scrm-tl-chips");
 	if (cv.commitment !== "none") {
 		const cm = COMMITMENT_META[cv.commitment];
 		span(chips, "scrm-chip scrm-chip-commit", `${cm.icon} ${cm.label}`);
@@ -180,4 +219,29 @@ function renderConversation(
 		);
 	}
 	span(chips, `scrm-chip scrm-out-${cv.outcome}`, `→ ${OUTCOME_META[cv.outcome].label}`);
+
+	entry.addEventListener("click", () => {
+		entry.toggleClass("is-collapsed", !entry.hasClass("is-collapsed"));
+	});
+}
+
+function conversationLinkPlaceholder(channel: Conversation["channel"]): string {
+	switch (channel) {
+		case "linkedin":
+			return "https://www.linkedin.com/in/... or LinkedIn message thread";
+		case "whatsapp":
+			return "https://wa.me/... or WhatsApp link";
+		case "email":
+			return "https://mail.google.com/... or email thread URL";
+		case "instagram":
+			return "https://www.instagram.com/direct/...";
+		case "facebook":
+			return "https://www.facebook.com/messages/...";
+		case "x":
+			return "https://x.com/messages/...";
+		case "website":
+			return "https://...";
+		case "other":
+			return "Paste channel URL";
+	}
 }
