@@ -59,8 +59,6 @@ export function renderLog(root: HTMLElement, view: CRMView, contactId: string): 
 	let autoAnalyzeTimer: number | null = null;
 
 	const head = div(root, "scrm-detail-head");
-	const back = span(head, "scrm-mono-mini scrm-link", "← contacts");
-	back.addEventListener("click", () => view.navigate({ screen: "contacts" }));
 	const idcol = div(head, "scrm-detail-idcol");
 	div(idcol, "scrm-detail-name", `Log conversation — ${contact.name}`);
 	div(
@@ -129,20 +127,8 @@ export function renderLog(root: HTMLElement, view: CRMView, contactId: string): 
 	button(foot, "scrm-btn", "Cancel", () => view.openConversationLog(contactId));
 	button(foot, "scrm-btn scrm-btn-primary", "Save conversation", () => void save());
 
-	const reminder = div(side, "scrm-momtest");
-	div(reminder, "scrm-panel-label scrm-accent", "MOM TEST REMINDER");
-	div(
-		reminder,
-		"scrm-momtest-text",
-		"Use the chat as raw material. Keep concrete past/present facts, real commitments, and answered questions. Compliments, fluff, and hypotheticals are not signal.",
-	);
-	const autoNote = div(side, "scrm-side-block");
-	div(autoNote, "scrm-panel-label", "LOCAL QWEN");
-	div(
-		autoNote,
-		"scrm-momtest-text",
-		"Only this contact, this person type, the 3 questions and pasted chat are sent to Ollama on your machine.",
-	);
+	const questionsPanel = div(side, "scrm-side-block");
+	paintSideQuestions();
 
 	function paintDetected(hits: string[]): void {
 		detectRow.empty();
@@ -194,6 +180,51 @@ export function renderLog(root: HTMLElement, view: CRMView, contactId: string): 
 		paintDetected(hits);
 		analysisApplied = true;
 		paintSignalSummary();
+		paintSideQuestions();
+	}
+
+	function paintSideQuestions(): void {
+		questionsPanel.empty();
+		const label = div(questionsPanel, "scrm-panel-label");
+		label.appendText("BIG QUESTIONS FOR THIS TYPE");
+		if (!type) {
+			div(questionsPanel, "scrm-muted", "No type set — ");
+			const link = span(
+				questionsPanel.lastElementChild as HTMLElement,
+				"scrm-link scrm-accent",
+				"assign one",
+			);
+			link.addEventListener("click", () => view.editContact(activeContact));
+			return;
+		}
+
+		const th = div(questionsPanel, "scrm-side-typehead");
+		const dot = span(th, "scrm-typedot");
+		dot.style.background = type.color;
+		span(th, "scrm-side-typename", type.name);
+
+		const coverage = store.typeCoverage(type.id);
+		const ql = div(questionsPanel, "scrm-qcov-list");
+		type.questions.forEach((q, idx) => {
+			const rowq = div(ql, "scrm-qcov");
+			span(rowq, "scrm-qcov-n", "Q" + (idx + 1)).style.color = type.color;
+			div(rowq, "scrm-qcov-text", q.text);
+			const current = answers.get(q.id) ?? "not_asked";
+			if (current !== "not_asked") {
+				const state = current === "answered" ? "answered" : "murky";
+				span(rowq, `scrm-cov scrm-cov-${state}`, current === "answered" ? "ANSWERED" : "MURKY");
+				return;
+			}
+			const cvg = coverage[idx];
+			const state = cvg?.state ?? "open";
+			const badge =
+				state === "answered"
+					? `ANSWERED ×${cvg.answered}`
+					: state === "murky"
+						? `MURKY ×${cvg.murky}`
+						: "OPEN";
+			span(rowq, `scrm-cov scrm-cov-${state}`, badge);
+		});
 	}
 
 	function paintSignalSummary(): void {
