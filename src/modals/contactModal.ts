@@ -13,6 +13,7 @@ export class ContactModal extends Modal {
 		company: string;
 		phone: string;
 		email: string;
+		profileUrl: string;
 		status: ContactStatus;
 		typeId: string | null;
 		learned: string;
@@ -29,13 +30,15 @@ export class ContactModal extends Modal {
 		this.store = store;
 		this.existing = existing;
 		this.afterSave = afterSave;
+		const defaultTypeId = existing ? existing.typeId : this.store.getDefaultPersonTypeId();
 		this.draft = {
 			name: existing?.name ?? "",
 			company: existing?.company ?? "",
 			phone: existing?.phone ?? "",
 			email: existing?.email ?? "",
+			profileUrl: existing?.profileUrl ?? "",
 			status: existing?.status ?? DEFAULT_CONTACT_STATUS,
-			typeId: existing?.typeId ?? null,
+			typeId: defaultTypeId,
 			learned: existing?.learned ?? "",
 			referredBy: existing?.referredBy ?? "",
 		};
@@ -60,6 +63,10 @@ export class ContactModal extends Modal {
 		});
 		textField(grid, "Phone", this.draft.phone, (v) => (this.draft.phone = v));
 		textField(grid, "Email", this.draft.email, (v) => (this.draft.email = v));
+		textField(grid, "Profile / conversation URL", this.draft.profileUrl, (v) => (this.draft.profileUrl = v), {
+			placeholder: "https://www.linkedin.com/in/...",
+			type: "url",
+		});
 
 		selectField(
 			grid,
@@ -76,7 +83,10 @@ export class ContactModal extends Modal {
 				...this.store.data.personTypes.map((t) => ({ value: t.id, label: t.name })),
 			],
 			this.draft.typeId ?? "",
-			(v) => (this.draft.typeId = v || null),
+			(v) => {
+				this.draft.typeId = v || null;
+				this.store.rememberPersonType(this.draft.typeId);
+			},
 		);
 
 		if (this.existing) {

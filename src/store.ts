@@ -14,6 +14,7 @@ import {
 	addDays,
 	weekKey,
 	weekLabelShort,
+	weekRangeLabel,
 } from "./util/dates";
 
 type Listener = () => void;
@@ -34,6 +35,7 @@ export interface Metrics {
 export interface WeekBar {
 	key: string;
 	label: string;
+	range: string;
 	count: number;
 }
 
@@ -93,9 +95,16 @@ export class CRMStore {
 	}
 
 	contactsSortedByRecency(): Contact[] {
-		return [...this.data.contacts].sort(
-			(a, b) => (b.lastContactedAt ?? b.addedAt) - (a.lastContactedAt ?? a.addedAt),
-		);
+		return [...this.data.contacts].sort((a, b) => {
+			const aTalkedAt = this.lastTalkedAt(a.id);
+			const bTalkedAt = this.lastTalkedAt(b.id);
+			if (aTalkedAt !== null || bTalkedAt !== null) {
+				if (aTalkedAt === null) return 1;
+				if (bTalkedAt === null) return -1;
+				return bTalkedAt - aTalkedAt || b.addedAt - a.addedAt;
+			}
+			return b.addedAt - a.addedAt;
+		});
 	}
 
 	contactsByStatus(status: ContactStatus): Contact[] {
@@ -110,6 +119,7 @@ export class CRMStore {
 			company: partial.company?.trim() || "",
 			phone: partial.phone?.trim() || "",
 			email: partial.email?.trim() || "",
+			profileUrl: partial.profileUrl?.trim() || "",
 			status: partial.status || DEFAULT_CONTACT_STATUS,
 			typeId: partial.typeId ?? null,
 			learned: partial.learned?.trim() || "",
@@ -120,14 +130,44 @@ export class CRMStore {
 			lastContactedAt: partial.lastContactedAt ?? null,
 		};
 		this.data.contacts.push(contact);
+		this.data.defaultPersonTypeId = contact.typeId;
 		this.commit();
 		return contact;
+	}
+
+	addContacts(partials: Partial<Contact>[]): Contact[] {
+		const added: Contact[] = [];
+		for (const partial of partials) {
+			const now = Date.now();
+			const contact: Contact = {
+				id: this.uid("c"),
+				name: partial.name?.trim() || "Untitled contact",
+				company: partial.company?.trim() || "",
+				phone: partial.phone?.trim() || "",
+				email: partial.email?.trim() || "",
+				profileUrl: partial.profileUrl?.trim() || "",
+				status: partial.status || DEFAULT_CONTACT_STATUS,
+				typeId: partial.typeId ?? null,
+				learned: partial.learned?.trim() || "",
+				nextStepText: partial.nextStepText?.trim() || "",
+				nextStepDate: partial.nextStepDate || "",
+				referredBy: partial.referredBy?.trim() || "",
+				addedAt: now,
+				lastContactedAt: partial.lastContactedAt ?? null,
+			};
+			this.data.contacts.push(contact);
+			this.data.defaultPersonTypeId = contact.typeId;
+			added.push(contact);
+		}
+		this.commit();
+		return added;
 	}
 
 	updateContact(id: string, patch: Partial<Contact>): void {
 		const c = this.getContact(id);
 		if (!c) return;
 		Object.assign(c, patch);
+		if ("typeId" in patch) this.data.defaultPersonTypeId = c.typeId;
 		this.commit();
 	}
 
@@ -148,7 +188,16 @@ export class CRMStore {
 	conversationsFor(contactId: string): Conversation[] {
 		return this.data.conversations
 			.filter((cv) => cv.contactId === contactId)
-			.sort((a, b) => b.createdAt - a.createdAt);
+			.sort(
+				(a, b) =>
+					parseISO(b.date).getTime() - parseISO(a.date).getTime() ||
+					b.createdAt - a.createdAt,
+			);
+	}
+
+	lastTalkedAt(contactId: string): number | null {
+		const latest = this.conversationsFor(contactId)[0];
+		return latest ? parseISO(latest.date).getTime() : null;
 	}
 
 	conversationCount(contactId: string): number {
@@ -156,7 +205,10 @@ export class CRMStore {
 			.length;
 	}
 
-	addConversation(input: Omit<Conversation, "id" | "createdAt">): Conversation {
+	addConversation(
+		input: Omit<Conversation, "id" | "createdAt">,
+		options: { silent?: boolean } = {},
+	): Conversation {
 		const cv: Conversation = {
 			...input,
 			id: this.uid("cv"),
@@ -165,25 +217,34 @@ export class CRMStore {
 		this.data.defaultConversationChannel = cv.channel;
 		this.data.conversations.push(cv);
 
-		// Roll the conversation forward into the contact's summary fields.
-		const c = this.getContact(cv.contactId);
-		if (c) {
-			c.lastContactedAt = parseISO(cv.date).getTime();
-			const learned = firstLine(cv.facts);
-			if (learned) c.learned = learned;
-			if (c.status === "to_contact" && cv.outcome !== "dead") {
-				c.status = "in_conversation";
-			}
-		}
-		this.commit();
+		this.applyConversationToContact(cv);
+		if (options.silent) void this.persist(this.data);
+		else this.commit();
 		return cv;
 	}
 
-	updateConversation(id: string, patch: Partial<Conversation>): void {
+	updateConversation(
+		id: string,
+		patch: Partial<Conversation>,
+		options: { silent?: boolean } = {},
+	): void {
 		const cv = this.data.conversations.find((conversation) => conversation.id === id);
 		if (!cv) return;
 		Object.assign(cv, patch);
-		this.commit();
+		this.applyConversationToContact(cv);
+		if (options.silent) void this.persist(this.data);
+		else this.commit();
+	}
+
+	private applyConversationToContact(cv: Conversation): void {
+		const c = this.getContact(cv.contactId);
+		if (!c) return;
+		c.lastContactedAt = parseISO(cv.date).getTime();
+		const learned = firstLine(cv.facts);
+		if (learned) c.learned = learned;
+		if (c.status === "to_contact" && cv.outcome !== "dead") {
+			c.status = "in_conversation";
+		}
 	}
 
 	deleteConversation(id: string): void {
@@ -233,6 +294,9 @@ export class CRMStore {
 		this.data.contacts.forEach((c) => {
 			if (c.typeId === id) c.typeId = null;
 		});
+		if (this.data.defaultPersonTypeId === id) {
+			this.data.defaultPersonTypeId = null;
+		}
 		this.commit();
 	}
 
@@ -248,6 +312,18 @@ export class CRMStore {
 	rememberConversationChannel(channel: Channel): void {
 		if (this.data.defaultConversationChannel === channel) return;
 		this.data.defaultConversationChannel = channel;
+		void this.persist(this.data);
+	}
+
+	getDefaultPersonTypeId(): string | null {
+		const id = this.data.defaultPersonTypeId;
+		return id && this.getType(id) ? id : null;
+	}
+
+	rememberPersonType(typeId: string | null): void {
+		const next = typeId && this.getType(typeId) ? typeId : null;
+		if (this.data.defaultPersonTypeId === next) return;
+		this.data.defaultPersonTypeId = next;
 		void this.persist(this.data);
 	}
 
@@ -299,6 +375,7 @@ export class CRMStore {
 			bars.push({
 				key,
 				label: weekLabelShort(d),
+				range: weekRangeLabel(d),
 				count: this.distinctContactsInWeek(key).size,
 			});
 		}
@@ -312,7 +389,9 @@ export class CRMStore {
 					(c.status === "to_contact" || c.status === "in_conversation"),
 			)
 			.sort((a, b) => {
-				return (b.lastContactedAt ?? b.addedAt) - (a.lastContactedAt ?? a.addedAt);
+				const aTalkedAt = this.lastTalkedAt(a.id);
+				const bTalkedAt = this.lastTalkedAt(b.id);
+				return (bTalkedAt ?? b.addedAt) - (aTalkedAt ?? a.addedAt);
 			})
 			.slice(0, limit);
 	}

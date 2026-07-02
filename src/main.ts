@@ -78,6 +78,12 @@ export default class SalesCRMPlugin extends Plugin {
 			// Use the "Load demo data" command to explore the example dataset.
 			return { data: emptyData(), isFirstRun: true };
 		}
+		const personTypes = raw.personTypes ?? [];
+		const defaultPersonTypeId =
+			raw.defaultPersonTypeId &&
+			personTypes.some((type) => type.id === raw.defaultPersonTypeId)
+				? raw.defaultPersonTypeId
+				: null;
 		return {
 			data: {
 				version: raw.version ?? DATA_VERSION,
@@ -87,9 +93,13 @@ export default class SalesCRMPlugin extends Plugin {
 					raw.defaultConversationChannel in CHANNEL_META
 						? raw.defaultConversationChannel
 						: DEFAULT_CONVERSATION_CHANNEL,
-				contacts: raw.contacts ?? [],
+				defaultPersonTypeId,
+				contacts: (raw.contacts ?? []).map((contact) => ({
+					...contact,
+					profileUrl: contact.profileUrl ?? "",
+				})),
 				conversations: raw.conversations ?? [],
-				personTypes: raw.personTypes ?? [],
+				personTypes,
 			},
 			isFirstRun: false,
 		};

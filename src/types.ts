@@ -52,6 +52,8 @@ export interface PersonType {
 export interface QuestionAnswer {
 	questionId: string;
 	state: AnswerState;
+	/** Prospect/customer response that answered or partially answered the question. */
+	response?: string;
 }
 
 export interface BadDataFlag {
@@ -66,6 +68,10 @@ export interface Conversation {
 	date: string;
 	channel: Channel;
 	conversationUrl: string;
+	/** Raw pasted chat transcript kept exactly for later review/edit. */
+	transcript: string;
+	/** Manual notes about the conversation, kept separate from AI-derived facts. */
+	notes: string;
 	/** Specifics about their life — not opinions about your idea. */
 	facts: string;
 	commitment: Commitment;
@@ -83,6 +89,8 @@ export interface Contact {
 	company: string;
 	phone: string;
 	email: string;
+	/** Quick-open profile or conversation URL for the prospect. */
+	profileUrl: string;
 	status: ContactStatus;
 	/** null when the contact has not been classified into a person type yet. */
 	typeId: string | null;
@@ -102,6 +110,7 @@ export interface CRMData {
 	/** Weekly conversation goal (Traction rock). */
 	weeklyGoal: number;
 	defaultConversationChannel: Channel;
+	defaultPersonTypeId: string | null;
 	contacts: Contact[];
 	conversations: Conversation[];
 	personTypes: PersonType[];
