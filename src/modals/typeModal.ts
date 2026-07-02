@@ -65,6 +65,17 @@ export class TypeModal extends Modal {
 				});
 				input.value = q.text;
 				input.addEventListener("input", () => (q.text = input.value));
+				input.addEventListener("paste", (event) => {
+					const pasted = event.clipboardData?.getData("text") ?? "";
+					const pastedQuestions = parsePastedQuestions(pasted);
+					if (pastedQuestions.length < 2) return;
+					event.preventDefault();
+					this.questions = pastedQuestions.map((text, qIdx) => ({
+						id: this.questions[qIdx]?.id ?? this.store.newQuestionId(),
+						text,
+					}));
+					drawQuestions();
+				});
 				const del = span(row, "scrm-qrow-del scrm-link", "✕");
 				del.addEventListener("click", () => {
 					this.questions.splice(idx, 1);
@@ -117,4 +128,38 @@ export class TypeModal extends Modal {
 	onClose(): void {
 		this.contentEl.empty();
 	}
+}
+
+function parsePastedQuestions(raw: string): string[] {
+	const text = raw.replace(/\r\n/g, "\n").trim();
+	if (!text) return [];
+
+	const numbered = parseNumberedQuestions(text);
+	if (numbered.length > 1) return numbered;
+
+	const lines = text
+		.split(/\n+/)
+		.map(cleanQuestionText)
+		.filter(Boolean);
+	return lines.length > 1 ? lines : [];
+}
+
+function parseNumberedQuestions(text: string): string[] {
+	const markers = Array.from(text.matchAll(/(?:^|\n)\s*(?:\d+[\.)]|q\d+[\.)-]?)\s+/gi));
+	if (markers.length < 2) return [];
+
+	return markers
+		.map((marker, idx) => {
+			const start = (marker.index ?? 0) + marker[0].length;
+			const end = idx + 1 < markers.length ? (markers[idx + 1].index ?? text.length) : text.length;
+			return cleanQuestionText(text.slice(start, end));
+		})
+		.filter(Boolean);
+}
+
+function cleanQuestionText(text: string): string {
+	return text
+		.replace(/\s+/g, " ")
+		.replace(/^\s*(?:\d+[\.)]|q\d+[\.)-]?|[-*])\s+/i, "")
+		.trim();
 }
