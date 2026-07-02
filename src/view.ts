@@ -9,13 +9,12 @@ import { renderDetail } from "./ui/detail";
 import { renderPipeline } from "./ui/pipeline";
 import { renderReview } from "./ui/review";
 import { renderPersonTypes } from "./ui/persontypes";
-import { renderLog } from "./ui/log";
 import { ContactModal } from "./modals/contactModal";
 import { TypeModal } from "./modals/typeModal";
 
 export const VIEW_TYPE_CRM = "sales-crm-view";
 
-export type Screen = "dashboard" | "contacts" | "pipeline" | "review" | "types" | "log";
+export type Screen = "dashboard" | "contacts" | "pipeline" | "review" | "types";
 
 export interface Route {
 	screen: Screen;
@@ -70,10 +69,10 @@ export class CRMView extends ItemView {
 	}
 
 	openContact(id: string): void {
-		this.logConversation(id);
+		this.navigate({ screen: "contacts", contactId: id });
 	}
 	openConversationLog(id: string): void {
-		this.navigate({ screen: "contacts", contactId: id });
+		this.openContact(id);
 	}
 
 	/* actions ---------------------------------------------------------------- */
@@ -87,7 +86,7 @@ export class CRMView extends ItemView {
 		new ContactModal(this.app, this.store, c).open();
 	}
 	logConversation(contactId: string): void {
-		this.navigate({ screen: "log", contactId });
+		this.openContact(contactId);
 	}
 	editType(t: PersonType | null): void {
 		new TypeModal(this.app, this.store, t).open();
@@ -122,10 +121,6 @@ export class CRMView extends ItemView {
 				break;
 			case "types":
 				renderPersonTypes(body, this);
-				break;
-			case "log":
-				if (this.route.contactId) renderLog(body, this, this.route.contactId);
-				else renderContacts(body, this);
 				break;
 		}
 	}

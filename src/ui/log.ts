@@ -1,6 +1,12 @@
 import { Notice } from "obsidian";
-import { analyzeConversationWithLangGraph } from "../ai/conversationAnalysis";
-import type { ConversationAnalysisResult } from "../ai/conversationAnalysis";
+import {
+	analyzeConversationWithLangGraph,
+	inferQuestionAnswersFromTranscript,
+} from "../ai/conversationAnalysis";
+import type {
+	ConversationAnalysisContext,
+	ConversationAnalysisResult,
+} from "../ai/conversationAnalysis";
 import type { CRMView } from "../view";
 import { div, span, button } from "../util/dom";
 import { todayISO } from "../util/dates";
@@ -16,12 +22,6 @@ import {
 	DEFAULT_CONVERSATION_CHANNEL,
 } from "../types";
 
-const STATE_LABEL: Record<AnswerState, string> = {
-	not_asked: "NOT ASKED",
-	answered: "ANSWERED",
-	murky: "MURKY — ASK AGAIN",
-};
-
 interface BadState {
 	on: boolean;
 	note: string;
@@ -29,6 +29,29 @@ interface BadState {
 }
 
 export function renderLog(root: HTMLElement, view: CRMView, contactId: string): void {
+	renderConversationComposerInternal(root, view, contactId, { embedded: false });
+}
+
+export function renderConversationComposer(
+	root: HTMLElement,
+	view: CRMView,
+	contactId: string,
+	sideTarget?: HTMLElement,
+	controlsTarget?: HTMLElement,
+): void {
+	renderConversationComposerInternal(root, view, contactId, {
+		embedded: true,
+		sideTarget,
+		controlsTarget,
+	});
+}
+
+function renderConversationComposerInternal(
+	root: HTMLElement,
+	view: CRMView,
+	contactId: string,
+	options: { embedded: boolean; sideTarget?: HTMLElement; controlsTarget?: HTMLElement },
+): void {
 	const store = view.store;
 	const contact = store.getContact(contactId);
 	if (!contact) {
@@ -38,52 +61,79 @@ export function renderLog(root: HTMLElement, view: CRMView, contactId: string): 
 	}
 	const activeContact = contact;
 	const type = store.getType(contact.typeId);
+	const loadedConversation = store.conversationsFor(contactId)[0] ?? null;
+	const initialChannel = validChannel(
+		loadedConversation?.channel || store.data.defaultConversationChannel,
+	);
 
 	const state = {
-		date: todayISO(),
-		channel: store.data.defaultConversationChannel ?? DEFAULT_CONVERSATION_CHANNEL,
-		facts: "",
-		commitment: "none" as Commitment,
-		outcome: "advancing" as Outcome,
+		date: loadedConversation?.date ?? todayISO(),
+		channel: initialChannel,
+		facts: loadedConversation?.facts ?? "",
+		commitment: (loadedConversation?.commitment ?? "none") as Commitment,
+		outcome: (loadedConversation?.outcome ?? "advancing") as Outcome,
 	};
+	const inferredAnswerResponses = new Map<string, string>();
+	if (loadedConversation?.transcript && type?.questions.length) {
+		inferQuestionAnswersFromTranscript({
+			transcript: loadedConversation.transcript,
+			context: analysisContext(),
+		}).forEach((answer) => {
+			if (answer.response?.trim()) {
+				inferredAnswerResponses.set(answer.questionId, answer.response.trim());
+			}
+		});
+	}
 	const answers = new Map<string, AnswerState>();
+	const answerResponses = new Map<string, string>();
 	type?.questions.forEach((q) => answers.set(q.id, "not_asked"));
+	loadedConversation?.questionAnswers.forEach((answer) => {
+		if (answers.has(answer.questionId)) answers.set(answer.questionId, answer.state);
+		const response = answer.response?.trim() || inferredAnswerResponses.get(answer.questionId);
+		if (answers.has(answer.questionId) && response) {
+			answerResponses.set(answer.questionId, response);
+		}
+	});
 	const bad = new Map<BadDataKind, BadState>([
 		["compliment", { on: false, note: "", touched: false }],
 		["fluff", { on: false, note: "", touched: false }],
 		["hypothetical", { on: false, note: "", touched: false }],
 	]);
-	let analysisApplied = false;
-	let lastAnalyzedTranscript = "";
+	loadedConversation?.badData.forEach((entry) => {
+		bad.set(entry.kind, { on: true, note: entry.note, touched: true });
+	});
+	let savedConversationId: string | null = loadedConversation?.id ?? null;
+	let analysisApplied = !!loadedConversation?.transcript;
+	let lastAnalyzedTranscript = loadedConversation?.transcript ?? "";
+	let lastPersistedSignature = "";
 	let analysisRunId = 0;
 	let autoAnalyzeTimer: number | null = null;
+	let notesSaveTimer: number | null = null;
 
-	const head = div(root, "scrm-detail-head");
-	const idcol = div(head, "scrm-detail-idcol");
-	div(idcol, "scrm-detail-name", `Log conversation — ${contact.name}`);
-	div(
-		idcol,
-		"scrm-detail-sub",
-		[contact.company, type ? `type: ${type.name}` : ""].filter(Boolean).join(" · "),
+	let main = root;
+	let side: HTMLElement | null = options.sideTarget ?? null;
+	if (!options.embedded) {
+		const head = div(root, "scrm-detail-head");
+		const idcol = div(head, "scrm-detail-idcol");
+		div(idcol, "scrm-detail-name", `Log conversation — ${contact.name}`);
+		div(
+			idcol,
+			"scrm-detail-sub",
+			[contact.company, type ? `type: ${type.name}` : ""].filter(Boolean).join(" · "),
+		);
+		button(head, "scrm-btn", "conversation log", () => view.openConversationLog(contactId));
+
+		const grid = div(root, "scrm-log-grid");
+		main = div(grid, "scrm-panel scrm-composer-panel");
+		side = div(grid, "scrm-panel scrm-side");
+	}
+
+	const controls = options.controlsTarget ?? main;
+	const chWrap = div(
+		controls,
+		options.controlsTarget ? "scrm-action-channel" : "scrm-field scrm-action-channel",
 	);
-	button(head, "scrm-btn", "conversation log", () => view.openConversationLog(contactId));
-
-	const grid = div(root, "scrm-log-grid");
-	const main = div(grid, "scrm-panel");
-	const side = div(grid, "scrm-panel scrm-side");
-
-	const meta = div(main, "scrm-log-metarow");
-	const dateWrap = div(meta, "scrm-field");
-	div(dateWrap, "scrm-field-label", "Date");
-	const dateInput = dateWrap.createEl("input", {
-		cls: "scrm-input",
-		attr: { type: "date" },
-	});
-	dateInput.value = state.date;
-	dateInput.addEventListener("input", () => (state.date = dateInput.value));
-
-	const chWrap = div(meta, "scrm-field");
-	div(chWrap, "scrm-field-label", "Channel");
+	if (!options.controlsTarget) div(chWrap, "scrm-field-label", "Channel");
 	const chSelWrap = div(chWrap, "scrm-select-wrap");
 	const chSel = chSelWrap.createEl("select", { cls: "scrm-input scrm-select" });
 	(Object.keys(CHANNEL_META) as Channel[]).forEach((channel) => {
@@ -94,8 +144,17 @@ export function renderLog(root: HTMLElement, view: CRMView, contactId: string): 
 	chSel.addEventListener("change", () => {
 		state.channel = chSel.value as Channel;
 		store.rememberConversationChannel(state.channel);
+		if (chatInput.value.trim() || notesInput.value.trim()) {
+			void persistConversation();
+		}
 	});
 	span(chSelWrap, "scrm-select-caret", "▾");
+	const conversationBadges = div(
+		controls,
+		options.controlsTarget
+			? "scrm-conversation-badges"
+			: "scrm-conversation-badges scrm-conversation-badges-block",
+	);
 
 	const chatField = div(main, "scrm-field scrm-ai-field");
 	div(chatField, "scrm-field-label", "Conversation transcript");
@@ -107,35 +166,86 @@ export function renderLog(root: HTMLElement, view: CRMView, contactId: string): 
 	const chatInput = chatField.createEl("textarea", {
 		cls: "scrm-input scrm-textarea scrm-ai-chat",
 	});
-	chatInput.rows = 8;
+	chatInput.value = loadedConversation?.transcript ?? "";
 	chatInput.setAttr("placeholder", "Paste LinkedIn chat transcript here...");
+	autoSizeTextarea(chatInput);
 	const aiActions = div(chatField, "scrm-ai-actions");
 	const analysisStatus = span(aiActions, "scrm-mono-mini");
 	const analysisResult = div(chatField, "scrm-ai-result");
 
-	const detectRow = div(main, "scrm-detect");
-	const signalSummary = div(main, "scrm-ai-signals");
+	const notesField = div(main, "scrm-field scrm-notes-field");
+	div(notesField, "scrm-field-label", "Notes");
+	div(notesField, "scrm-field-desc", "Quick manual notes for this conversation.");
+	const notesInput = notesField.createEl("textarea", {
+		cls: "scrm-input scrm-textarea scrm-notes-input",
+	});
+	notesInput.value = loadedConversation?.notes ?? "";
+	notesInput.setAttr("placeholder", "Add notes here...");
+	autoSizeTextarea(notesInput);
+	const notesStatus = div(notesField, "scrm-mono-mini scrm-muted");
+
+	const questionsPanel = side ? div(side, "scrm-side-block") : null;
+	const signalSummary = div(side ?? main, "scrm-ai-signals");
 	chatInput.addEventListener("input", () => {
+		autoSizeTextarea(chatInput);
+		analysisRunId++;
 		analysisApplied = false;
 		analysisStatus.setText("");
 		analysisResult.empty();
+		answers.forEach((_, questionId) => answers.set(questionId, "not_asked"));
+		answerResponses.clear();
+		paintConversationBadges();
+		paintSideQuestions();
 		signalSummary.empty();
 		scheduleAutoAnalysis();
 	});
+	notesInput.addEventListener("input", () => {
+		autoSizeTextarea(notesInput);
+		scheduleNotesSave();
+	});
 
-	const foot = div(main, "scrm-modal-foot");
-	button(foot, "scrm-btn", "Cancel", () => view.openConversationLog(contactId));
-	button(foot, "scrm-btn scrm-btn-primary", "Save conversation", () => void save());
+	if (!options.embedded) {
+		const foot = div(main, "scrm-modal-foot");
+		button(foot, "scrm-btn", "Cancel", () => view.openConversationLog(contactId));
+	}
 
-	const questionsPanel = div(side, "scrm-side-block");
-	paintSideQuestions();
-
-	function paintDetected(hits: string[]): void {
-		detectRow.empty();
-		if (hits.length) {
-			span(detectRow, "scrm-detect-label", "DETECTED");
-			hits.forEach((h) => span(detectRow, "scrm-detect-chip", h));
+	if (questionsPanel) paintSideQuestions();
+	if (loadedConversation) {
+		lastPersistedSignature = currentSignature(chatInput.value.trim());
+		paintLoadedConversation();
+		if (
+			loadedConversation.transcript.trim() &&
+			type?.questions.length &&
+			!loadedConversation.questionAnswers.length
+		) {
+			window.setTimeout(() => void runAiAnalysis({ force: true }), 250);
 		}
+	}
+
+	function paintConversationBadges(): void {
+		conversationBadges.empty();
+		if (!analysisApplied) return;
+		let count = 0;
+		bad.forEach((entry, kind) => {
+			if (!entry.on) return;
+			const meta = BAD_DATA_META[kind];
+			const note = entry.note.trim();
+			span(
+				conversationBadges,
+				"scrm-chip scrm-chip-bad",
+				`${meta.icon} ${meta.label}${note ? `: ${clip(note, 42)}` : ""}`,
+			);
+			count++;
+		});
+		if (!count) {
+			span(conversationBadges, "scrm-chip scrm-chip-empty", "no bad-data");
+		}
+	}
+
+	function paintLoadedConversation(): void {
+		paintConversationBadges();
+		paintSignalSummary();
+		paintSideQuestions();
 	}
 
 	function scheduleAutoAnalysis(): void {
@@ -149,6 +259,16 @@ export function renderLog(root: HTMLElement, view: CRMView, contactId: string): 
 		}, 1200);
 	}
 
+	function scheduleNotesSave(): void {
+		if (notesSaveTimer) window.clearTimeout(notesSaveTimer);
+		notesStatus.setText("Saving notes...");
+		notesSaveTimer = window.setTimeout(async () => {
+			notesSaveTimer = null;
+			const saved = await persistConversation();
+			notesStatus.setText(saved ? "Notes saved." : "");
+		}, 500);
+	}
+
 	function applyAnalysis(result: ConversationAnalysisResult): void {
 		state.facts = result.draft.facts;
 
@@ -158,9 +278,13 @@ export function renderLog(root: HTMLElement, view: CRMView, contactId: string): 
 		answers.forEach((_, questionId) => {
 			answers.set(questionId, "not_asked");
 		});
+		answerResponses.clear();
 		result.draft.questionAnswers.forEach((answer) => {
 			if (!answers.has(answer.questionId)) return;
 			answers.set(answer.questionId, answer.state);
+			if (answer.response?.trim()) {
+				answerResponses.set(answer.questionId, answer.response.trim());
+			}
 		});
 
 		const draftBad = new Map(result.draft.badData.map((entry) => [entry.kind, entry.note]));
@@ -172,18 +296,14 @@ export function renderLog(root: HTMLElement, view: CRMView, contactId: string): 
 			entry.touched = true;
 		});
 
-		const hits: string[] = [];
-		if (state.commitment !== "none") hits.push(`commitment: ${state.commitment}`);
-		bad.forEach((entry, kind) => {
-			if (entry.on) hits.push(kind);
-		});
-		paintDetected(hits);
 		analysisApplied = true;
+		paintConversationBadges();
 		paintSignalSummary();
 		paintSideQuestions();
 	}
 
 	function paintSideQuestions(): void {
+		if (!questionsPanel) return;
 		questionsPanel.empty();
 		const label = div(questionsPanel, "scrm-panel-label");
 		label.appendText("BIG QUESTIONS FOR THIS TYPE");
@@ -208,11 +328,14 @@ export function renderLog(root: HTMLElement, view: CRMView, contactId: string): 
 		type.questions.forEach((q, idx) => {
 			const rowq = div(ql, "scrm-qcov");
 			span(rowq, "scrm-qcov-n", "Q" + (idx + 1)).style.color = type.color;
-			div(rowq, "scrm-qcov-text", q.text);
+			const qmain = div(rowq, "scrm-qcov-main");
+			div(qmain, "scrm-qcov-text", q.text);
 			const current = answers.get(q.id) ?? "not_asked";
 			if (current !== "not_asked") {
 				const state = current === "answered" ? "answered" : "murky";
 				span(rowq, `scrm-cov scrm-cov-${state}`, current === "answered" ? "ANSWERED" : "MURKY");
+				const response = answerResponses.get(q.id);
+				if (response) div(qmain, "scrm-qcov-response", clip(response, 180));
 				return;
 			}
 			const cvg = coverage[idx];
@@ -237,36 +360,28 @@ export function renderLog(root: HTMLElement, view: CRMView, contactId: string): 
 		const commitment = COMMITMENT_META[state.commitment];
 		span(commitmentRow, "scrm-chip scrm-chip-commit", `${commitment.icon} ${commitment.label}`);
 
-		if (!type?.questions.length) return;
-		const questionWrap = div(signalSummary, "scrm-ai-question-summary");
-		for (const q of type.questions) {
-			const answer = answers.get(q.id) ?? "not_asked";
-			const row = div(questionWrap, "scrm-qcheck is-readonly is-" + answer);
-			const box = div(row, "scrm-qcheck-box");
-			box.setText(answer === "answered" ? "✓" : answer === "murky" ? "~" : "");
-			div(row, "scrm-qcheck-text", q.text || "(empty question)");
-			span(row, "scrm-qcheck-state", STATE_LABEL[answer]);
+		const badRow = div(signalSummary, "scrm-ai-signal-row scrm-ai-bad-row");
+		span(badRow, "scrm-mono-mini scrm-muted", "BAD DATA");
+		const badChips = div(badRow, "scrm-ai-bad-chips");
+		let badCount = 0;
+		bad.forEach((entry, kind) => {
+			if (!entry.on) return;
+			const meta = BAD_DATA_META[kind];
+			span(
+				badChips,
+				"scrm-chip scrm-chip-bad",
+				`${meta.icon} ${meta.label}${entry.note ? `: ${clip(entry.note, 42)}` : ""}`,
+			);
+			badCount++;
+		});
+		if (!badCount) {
+			span(badChips, "scrm-chip", "none");
 		}
 	}
 
 	function paintAnalysisResult(result: ConversationAnalysisResult): void {
 		analysisResult.empty();
-		const head = div(analysisResult, "scrm-ai-result-head");
-		div(
-			head,
-			"scrm-mono-mini",
-			`${result.source.toUpperCase()} · ${result.lines.length} TURNS`,
-		);
 		result.warnings.forEach((warning) => div(analysisResult, "scrm-ai-warning", warning));
-
-		const lines = div(analysisResult, "scrm-ai-lines");
-		result.lines.forEach((line) => {
-			const row = div(lines, "scrm-ai-line");
-			span(row, `scrm-ai-label scrm-ai-label-${line.label}`, line.label);
-			span(row, "scrm-ai-confidence", `${Math.round(line.confidence * 100)}%`);
-			div(row, "scrm-ai-line-text", line.speaker ? `${line.speaker}: ${line.text}` : line.text);
-			if (line.questionId) span(row, "scrm-ai-question", line.questionId);
-		});
 	}
 
 	async function runAiAnalysis(options: { force: boolean }): Promise<boolean> {
@@ -281,19 +396,17 @@ export function renderLog(root: HTMLElement, view: CRMView, contactId: string): 
 		try {
 			const result = await analyzeConversationWithLangGraph({
 				transcript,
-				context: {
-					contactName: activeContact.name,
-					company: activeContact.company,
-					personTypeName: type?.name ?? "",
-					questions: type?.questions.map((q) => ({ id: q.id, text: q.text })) ?? [],
-				},
+				context: analysisContext(),
 			});
 			if (runId !== analysisRunId) return false;
 			lastAnalyzedTranscript = transcript;
 			paintAnalysisResult(result);
 			applyAnalysis(result);
+			await persistConversation();
 			analysisStatus.setText(
-				result.source === "qwen" ? "Qwen decisions applied." : "Heuristic fallback applied.",
+				result.source === "qwen"
+					? "Qwen decisions applied. Saved."
+					: "Heuristic fallback applied. Saved.",
 			);
 			return true;
 		} catch (err) {
@@ -305,20 +418,10 @@ export function renderLog(root: HTMLElement, view: CRMView, contactId: string): 
 		}
 	}
 
-	async function save(): Promise<void> {
-		if (autoAnalyzeTimer) {
-			window.clearTimeout(autoAnalyzeTimer);
-			autoAnalyzeTimer = null;
-		}
+	async function persistConversation(): Promise<boolean> {
 		const transcript = chatInput.value.trim();
-		if (transcript && !analysisApplied) {
-			const ok = await runAiAnalysis({ force: true });
-			if (!ok) return;
-		}
-		if (!transcript) {
-			new Notice("Paste chat before saving.");
-			return;
-		}
+		const notes = notesInput.value.trim();
+		if (!transcript && !notes) return false;
 
 		const badData: { kind: BadDataKind; note: string }[] = [];
 		bad.forEach((v, kind) => {
@@ -326,20 +429,86 @@ export function renderLog(root: HTMLElement, view: CRMView, contactId: string): 
 		});
 		const questionAnswers = Array.from(answers.entries())
 			.filter(([, s]) => s !== "not_asked")
-			.map(([questionId, s]) => ({ questionId, state: s }));
+			.map(([questionId, s]) => {
+				const response = answerResponses.get(questionId);
+				return {
+					questionId,
+					state: s,
+					...(response ? { response } : {}),
+				};
+			});
 
-		store.addConversation({
+		const payload = {
 			contactId,
 			date: state.date || todayISO(),
 			channel: state.channel,
 			conversationUrl: "",
+			transcript,
+			notes,
 			facts: state.facts,
 			commitment: state.commitment,
 			badData,
 			questionAnswers,
 			nextStep: "",
 			outcome: state.outcome,
-		});
-		view.openConversationLog(contactId);
+		};
+		const signature = currentSignature(transcript);
+		if (signature === lastPersistedSignature) return true;
+		if (savedConversationId) {
+			store.updateConversation(savedConversationId, payload, { silent: options.embedded });
+		} else {
+			const saved = store.addConversation(payload, { silent: options.embedded });
+			savedConversationId = saved.id;
+		}
+		lastPersistedSignature = signature;
+		return true;
 	}
+
+	function currentSignature(transcript: string): string {
+		const badData = Array.from(bad.entries())
+			.filter(([, v]) => v.on)
+			.map(([kind, v]) => `${kind}:${v.note.trim()}`)
+			.sort();
+		const questionAnswers = Array.from(answers.entries())
+			.filter(([, s]) => s !== "not_asked")
+			.map(([questionId, s]) => `${questionId}:${s}:${answerResponses.get(questionId) ?? ""}`)
+			.sort();
+		return JSON.stringify({
+			date: state.date || todayISO(),
+			channel: state.channel,
+			transcript,
+			notes: notesInput.value.trim(),
+			facts: state.facts,
+			commitment: state.commitment,
+			badData,
+			questionAnswers,
+			outcome: state.outcome,
+		});
+	}
+
+	function analysisContext(): ConversationAnalysisContext {
+		return {
+			contactName: activeContact.name,
+			company: activeContact.company,
+			personTypeName: type?.name ?? "",
+			questions: type?.questions.map((q) => ({ id: q.id, text: q.text })) ?? [],
+		};
+	}
+}
+
+function clip(value: string, max: number): string {
+	const clean = value.replace(/\s+/g, " ").trim();
+	if (clean.length <= max) return clean;
+	return clean.slice(0, Math.max(0, max - 1)).trimEnd() + "…";
+}
+
+function validChannel(value: unknown): Channel {
+	return typeof value === "string" && value in CHANNEL_META
+		? (value as Channel)
+		: DEFAULT_CONVERSATION_CHANNEL;
+}
+
+function autoSizeTextarea(textarea: HTMLTextAreaElement): void {
+	textarea.style.height = "auto";
+	textarea.style.height = `${textarea.scrollHeight}px`;
 }

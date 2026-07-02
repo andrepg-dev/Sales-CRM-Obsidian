@@ -1,5 +1,6 @@
 import type { CRMView } from "../view";
 import { div, span, button, initials } from "../util/dom";
+import { relDays } from "../util/dates";
 
 export function renderDashboard(root: HTMLElement, view: CRMView): void {
 	const store = view.store;
@@ -57,12 +58,23 @@ export function renderDashboard(root: HTMLElement, view: CRMView): void {
 	const chart = div(chartCol, "scrm-bars");
 	bars.forEach((b, i) => {
 		const isCurrent = i === bars.length - 1;
-		const col = div(chart, "scrm-bar-col");
+		const percentOfGoal = Math.round((b.count / Math.max(1, m.weeklyGoal)) * 100);
+		const col = div(chart, "scrm-bar-col scrm-chart-point");
+		col.setAttr("tabindex", "0");
+		col.setAttr("role", "img");
+		col.setAttr(
+			"aria-label",
+			`${b.range}: ${b.count} contacts, ${percentOfGoal}% of weekly goal`,
+		);
 		div(col, "scrm-bar-val" + (isCurrent ? " scrm-accent" : ""), String(b.count));
 		const track = div(col, "scrm-bar-track");
 		const fill = div(track, "scrm-bar-fill" + (isCurrent ? " is-current" : ""));
 		fill.style.height = `${Math.round((b.count / max) * 100)}%`;
 		div(col, "scrm-bar-label" + (isCurrent ? " scrm-accent" : ""), b.label);
+		const tip = div(col, "scrm-chart-tooltip");
+		div(tip, "scrm-chart-tip-range", b.range);
+		div(tip, "scrm-chart-tip-count", `${b.count} ${b.count === 1 ? "contact" : "contacts"}`);
+		div(tip, "scrm-chart-tip-goal", `${percentOfGoal}% of weekly goal`);
 	});
 
 	const goal = div(chartCol, "scrm-goal-row");
@@ -93,10 +105,12 @@ export function renderDashboard(root: HTMLElement, view: CRMView): void {
 		div(row, "scrm-avatar", initials(c.name));
 		const mid = div(row, "scrm-uprow-mid");
 		div(mid, "scrm-uprow-name", c.name);
+		const created = div(mid, "scrm-uprow-sub", `created ${relDays(c.addedAt)}`);
+		created.setAttr("title", new Date(c.addedAt).toLocaleString());
 		span(
 			row,
 			"scrm-mono-mini scrm-muted",
-			c.lastContactedAt ? "LOGGED" : "NEW",
+			store.lastTalkedAt(c.id) ? "LOGGED" : "NEW",
 		);
 	}
 

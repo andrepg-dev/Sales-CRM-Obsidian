@@ -5,6 +5,7 @@ import {
 	BadDataKind,
 	Commitment,
 	Outcome,
+	QuestionAnswer,
 } from "../types";
 import { detect } from "../util/detect";
 
@@ -43,7 +44,7 @@ export interface ConversationAnalysisDraft {
 	facts: string;
 	commitment: Commitment;
 	badData: BadDataFlag[];
-	questionAnswers: { questionId: string; state: AnswerState }[];
+	questionAnswers: QuestionAnswer[];
 	outcome: Outcome;
 }
 
@@ -91,6 +92,7 @@ interface ConversationTurn {
 interface ModelQuestionAnswer {
 	questionId?: string;
 	state?: string;
+	response?: string;
 }
 
 interface ModelBadData {
@@ -206,6 +208,12 @@ export async function analyzeConversationWithLangGraph(
 	]);
 }
 
+export function inferQuestionAnswersFromTranscript(
+	input: Pick<ConversationAnalysisInput, "transcript" | "context">,
+): QuestionAnswer[] {
+	return heuristicResult(input.transcript, input.context, []).draft.questionAnswers;
+}
+
 function preparePrompt(state: typeof AnalysisState.State): Partial<GraphState> {
 	return { prompt: buildPrompt(state.transcript, state.context) };
 }
@@ -292,11 +300,19 @@ Labels:
 
 Rules:
 - Return strict JSON only. No markdown.
+- The first speaker who opens the conversation is the seller doing outreach, never the prospect.
+- The contact named above is the prospect/customer.
 - Read the whole conversation from start to finish before tagging.
 - Classify complete conversation turns, not individual raw transcript lines.
+- Return exactly one lines item for every Conversation turn, preserving line numbers and text.
 - A speaker-name header, timestamp, or sender label is metadata, not a fact.
 - Only the prospect/customer's turns can become facts, commitments, bad data, or question answers.
 - The seller's own questions and follow-ups are other unless they quote a prospect fact.
+- Seller questions can identify which big question was asked.
+- Grade questionAnswers from the next prospect/customer response: specific fact or commitment = answered; vague, opinion, hypothetical, or partial answer = murky; no response = not_asked.
+- Include the exact prospect/customer answer turn as questionAnswers.response.
+- If a big question gets a direct but generic/partial prospect response, return murky rather than omitting the question.
+- Put questionId on the prospect/customer answer turn, not on the seller question turn.
 - Match questionId only to ids above. Use null when unsure.
 - Big questions are context, not a checklist to force-fill.
 - Mark question answer only when the prospect answers with a useful fact or commitment.
@@ -323,7 +339,7 @@ JSON schema:
     "facts": "newline-separated factual notes only",
     "commitment": "time|reputation|money|none",
     "badData": [{"kind": "compliment|fluff|hypothetical", "note": "short quote"}],
-    "questionAnswers": [{"questionId": "id", "state": "answered|murky|not_asked"}],
+    "questionAnswers": [{"questionId": "id", "state": "answered|murky|not_asked", "response": "exact prospect/customer answer turn"}],
     "outcome": "advancing|stalled|dead"
   },
   "warnings": []
@@ -341,8 +357,12 @@ function normalizeModelResult(
 ): ConversationAnalysisResult {
 	const questionIds = new Set(context.questions.map((q) => q.id));
 	const transcriptLines = splitLines(transcript);
-	const lines = normalizeLines(model.lines, transcriptLines, questionIds, context);
+	const sellerSpeakers = identifySellerSpeakers(transcriptLines, context);
+	const modelLines = normalizeLines(model.lines, transcriptLines, questionIds, context, sellerSpeakers);
 	const fallback = heuristicResult(transcript, context, []);
+	// Derive the draft from real lines even when the model omits them,
+	// otherwise sequence inference and fact extraction silently no-op.
+	const lines = modelLines.length ? modelLines : fallback.lines;
 	const draft = model.draft ?? {};
 
 	const facts = normalizeFacts(draft.facts) || deriveFacts(lines) || fallback.draft.facts;
@@ -354,6 +374,8 @@ function normalizeModelResult(
 		draft.questionAnswers,
 		lines,
 		questionIds,
+		context,
+		sellerSpeakers,
 	);
 	const outcome =
 		toOutcome(draft.outcome) ||
@@ -361,7 +383,7 @@ function normalizeModelResult(
 
 	return {
 		source: "qwen",
-		lines: lines.length ? lines : fallback.lines,
+		lines,
 		draft: {
 			facts,
 			commitment,
@@ -381,32 +403,60 @@ function normalizeLines(
 	transcriptLines: ConversationTurn[],
 	questionIds: Set<string>,
 	context: ConversationAnalysisContext,
+	sellerSpeakers: Set<string>,
 ): ConversationLineAnalysis[] {
 	if (!Array.isArray(modelLines)) return [];
-	return modelLines
-		.map((line, idx) => {
-			const fallbackLine = transcriptLines.find((l) => l.line === line.line) ?? transcriptLines[idx];
-			const text = cleanText(line.text) || fallbackLine?.text || "";
+	if (!modelLines.length) return [];
+
+	const transcriptLineNumbers = new Set(transcriptLines.map((line) => line.line));
+	const modelByLine = new Map<number, ModelLine>();
+	const modelByText = new Map<string, ModelLine>();
+	modelLines.forEach((line) => {
+		if (typeof line.line === "number" && transcriptLineNumbers.has(line.line)) {
+			modelByLine.set(line.line, line);
+		}
+		const textKey = turnTextKey(cleanText(line.text));
+		if (textKey && !modelByText.has(textKey)) modelByText.set(textKey, line);
+	});
+	const canTrustIndexFallback = modelLines.length === transcriptLines.length;
+
+	return transcriptLines
+		.map((fallbackLine, idx) => {
+			const modelLine =
+				modelByLine.get(fallbackLine.line) ??
+				modelByText.get(turnTextKey(fallbackLine.text)) ??
+				(canTrustIndexFallback ? modelLines[idx] : undefined);
+			const text = fallbackLine.text;
 			if (!text) return null;
-			const speaker = cleanText(line.speaker) || fallbackLine?.speaker || null;
-			const label = sanitizeLineLabel(text, toLabel(line.label), speaker, context);
+			const speaker = fallbackLine.speaker || cleanText(modelLine?.speaker) || null;
+			const heuristic = heuristicLabel(
+				text,
+				detect(text),
+				speaker,
+				context,
+				sellerSpeakers,
+			);
+			const label = modelLine
+				? sanitizeLineLabel(text, toLabel(modelLine.label), speaker, context, sellerSpeakers)
+				: heuristic;
 			const questionId =
 				label !== "other" &&
-				typeof line.questionId === "string" &&
-				questionIds.has(line.questionId)
-					? line.questionId
+				typeof modelLine?.questionId === "string" &&
+				questionIds.has(modelLine.questionId)
+					? modelLine.questionId
 					: null;
 			return {
-				line:
-					typeof line.line === "number" && Number.isFinite(line.line)
-						? line.line
-						: (fallbackLine?.line ?? idx + 1),
+				line: fallbackLine.line,
 				speaker,
 				text,
 				label,
-				confidence: clampConfidence(line.confidence),
+				confidence: modelLine
+					? clampConfidence(modelLine.confidence)
+					: heuristic === "other"
+						? 0.4
+						: 0.7,
 				questionId,
-				reason: cleanText(line.reason),
+				reason: modelLine ? cleanText(modelLine.reason) : "Local heuristic for missing model turn.",
 			};
 		})
 		.filter((line): line is ConversationLineAnalysis => line !== null);
@@ -417,9 +467,11 @@ function heuristicResult(
 	context: ConversationAnalysisContext,
 	warnings: string[],
 ): ConversationAnalysisResult {
-	const lines = splitLines(transcript).map((line) => {
+	const transcriptLines = splitLines(transcript);
+	const sellerSpeakers = identifySellerSpeakers(transcriptLines, context);
+	const lines = transcriptLines.map((line) => {
 		const det = detect(line.text);
-		const label = heuristicLabel(line.text, det, line.speaker, context);
+		const label = heuristicLabel(line.text, det, line.speaker, context, sellerSpeakers);
 		return {
 			line: line.line,
 			speaker: line.speaker,
@@ -440,6 +492,8 @@ function heuristicResult(
 		[],
 		lines,
 		new Set(context.questions.map((q) => q.id)),
+		context,
+		sellerSpeakers,
 	);
 
 	return {
@@ -464,16 +518,15 @@ function heuristicLabel(
 	det: ReturnType<typeof detect>,
 	speaker: string | null,
 	context: ConversationAnalysisContext,
+	sellerSpeakers: Set<string>,
 ): ConversationLineLabel {
-	if (!isProspectSpeaker(speaker, context.contactName)) return "other";
+	if (!isProspectTurn(text, speaker, context, sellerSpeakers)) return "other";
 	if (isTranscriptHeader(text) || isSellerDiscoveryQuestion(text)) return "other";
 	if (det.commitment !== "none") return "commitment";
 	if (det.bad.compliment) return "compliment";
 	if (det.bad.hypothetical) return "hypothetical";
 	if (det.bad.fluff) return "fluff";
-	if (/\d|last|yesterday|today|week|month|paid|lost|uses|takes|customers?|orders?|ayer|hoy|semana|mes|pag[óo]|perd|usa|clientes?|pedidos?/i.test(text)) {
-		return "fact";
-	}
+	if (hasSpecificQuestionAnswerSignal(text)) return "fact";
 	return "other";
 }
 
@@ -482,23 +535,65 @@ function sanitizeLineLabel(
 	label: ConversationLineLabel,
 	speaker: string | null,
 	context: ConversationAnalysisContext,
+	sellerSpeakers: Set<string>,
 ): ConversationLineLabel {
-	if (!isProspectSpeaker(speaker, context.contactName)) return "other";
+	if (!isProspectTurn(text, speaker, context, sellerSpeakers)) return "other";
 	if (isTranscriptHeader(text)) return "other";
 	if (isSellerDiscoveryQuestion(text)) return "other";
 	return label;
 }
 
-function isProspectSpeaker(speaker: string | null, contactName: string): boolean {
-	if (!speaker) return true;
-	const normalizedContact = normalizeName(contactName);
-	if (!normalizedContact || normalizedContact === "nuevo contacto") return true;
-	const normalizedSpeaker = normalizeName(speaker);
+function identifySellerSpeakers(
+	turns: ConversationTurn[],
+	context: ConversationAnalysisContext,
+): Set<string> {
+	const speakers = new Set<string>();
+	// Outbound CRM: the seller always opens the conversation, so the first
+	// named speaker is the seller unless it is the contact themself.
+	const firstNamed = turns.find((turn) => speakerKey(turn.speaker));
+	const firstKey = firstNamed ? speakerKey(firstNamed.speaker) : "";
+	if (firstKey && !matchesContactName(firstKey, context)) speakers.add(firstKey);
+	turns.forEach((turn) => {
+		const key = speakerKey(turn.speaker);
+		if (!key || matchesContactName(key, context)) return;
+		if (isSellerQuestionText(turn.text, context)) speakers.add(key);
+	});
+	return speakers;
+}
+
+function matchesContactName(normalizedSpeaker: string, context: ConversationAnalysisContext): boolean {
+	const normalizedContact = normalizeName(context.contactName);
+	if (!normalizedContact || normalizedContact === "nuevo contacto") return false;
 	return (
 		normalizedSpeaker === normalizedContact ||
 		normalizedSpeaker.includes(normalizedContact) ||
 		normalizedContact.includes(normalizedSpeaker)
 	);
+}
+
+function isProspectTurn(
+	text: string,
+	speaker: string | null,
+	context: ConversationAnalysisContext,
+	sellerSpeakers: Set<string>,
+): boolean {
+	const key = speakerKey(speaker);
+	if (key && sellerSpeakers.has(key)) return false;
+	if (key && matchesContactName(key, context)) return true;
+	if (isSellerQuestionText(text, context)) return false;
+	if (!key) return true;
+	const normalizedContact = normalizeName(context.contactName);
+	if (!normalizedContact || normalizedContact === "nuevo contacto") return true;
+	return sellerSpeakers.size > 0;
+}
+
+function isSellerQuestionText(text: string, context: ConversationAnalysisContext): boolean {
+	if (!text.includes("?")) return false;
+	return isSellerDiscoveryQuestion(text) || bestQuestionId(text, context.questions) !== null;
+}
+
+function speakerKey(speaker: string | null): string {
+	return speaker ? normalizeName(speaker) : "";
 }
 
 function normalizeName(value: string): string {
@@ -596,31 +691,128 @@ function normalizeQuestionAnswers(
 	modelAnswers: ModelQuestionAnswer[] | undefined,
 	lines: ConversationLineAnalysis[],
 	questionIds: Set<string>,
-): { questionId: string; state: AnswerState }[] {
-	const answers = new Map<string, AnswerState>();
-	const setAnswer = (questionId: string, state: AnswerState) => {
+	context: ConversationAnalysisContext,
+	sellerSpeakers: Set<string>,
+): QuestionAnswer[] {
+	const answers = new Map<string, { state: AnswerState; response: string }>();
+	const setAnswer = (
+		questionId: string,
+		state: AnswerState,
+		response = "",
+		allowDowngrade = false,
+	) => {
 		if (!questionIds.has(questionId) || state === "not_asked") return;
 		const current = answers.get(questionId);
-		if (current === "answered") return;
-		answers.set(questionId, current === "murky" && state !== "answered" ? current : state);
+		const cleanResponse = cleanQuestionResponse(response);
+		if (current?.state === "answered" && state !== "answered" && !allowDowngrade) {
+			if (!current.response && cleanResponse) current.response = cleanResponse;
+			return;
+		}
+		answers.set(questionId, {
+			state: current?.state === "murky" && state !== "answered" ? current.state : state,
+			response: cleanResponse || current?.response || "",
+		});
 	};
 
 	if (Array.isArray(modelAnswers)) {
 		modelAnswers.forEach((answer) => {
 			const state = toAnswerState(answer.state);
-			if (answer.questionId && state) setAnswer(answer.questionId, state);
+			if (answer.questionId && state) {
+				setAnswer(answer.questionId, state, answer.response);
+			}
 		});
 	}
 	lines.forEach((line) => {
 		if (!line.questionId) return;
-		if (line.label === "fact" || line.label === "commitment") {
-			setAnswer(line.questionId, "answered");
-		} else if (line.label !== "other") {
-			setAnswer(line.questionId, "murky");
-		}
+		const state = classifyQuestionResponse(line);
+		if (state !== "not_asked") setAnswer(line.questionId, state, line.text);
 	});
+	inferQuestionAnswersFromSequence(lines, context, sellerSpeakers).forEach(
+		(answer, questionId) => {
+			setAnswer(questionId, answer.state, answer.response, true);
+		},
+	);
 
-	return Array.from(answers.entries()).map(([questionId, state]) => ({ questionId, state }));
+	return Array.from(answers.entries()).map(([questionId, answer]) => ({
+		questionId,
+		state: answer.state,
+		...(answer.response ? { response: answer.response } : {}),
+	}));
+}
+
+function inferQuestionAnswersFromSequence(
+	lines: ConversationLineAnalysis[],
+	context: ConversationAnalysisContext,
+	sellerSpeakers: Set<string>,
+): Map<string, { state: AnswerState; response: string }> {
+	const answers = new Map<string, { state: AnswerState; response: string }>();
+	lines.forEach((line, idx) => {
+		if (!isSellerQuestionText(line.text, context)) return;
+		const questionId = bestQuestionId(line.text, context.questions);
+		if (!questionId) return;
+		const response = lines
+			.slice(idx + 1)
+			.find((candidate) =>
+				isProspectTurn(candidate.text, candidate.speaker, context, sellerSpeakers) &&
+				!isSellerQuestionText(candidate.text, context),
+			);
+		if (!response) return;
+		answers.set(questionId, {
+			state: classifyQuestionResponse(response),
+			response: response.text,
+		});
+	});
+	return answers;
+}
+
+function cleanQuestionResponse(value: string | undefined): string {
+	return cleanText(value).replace(/\s+/g, " ");
+}
+
+function classifyQuestionResponse(line: ConversationLineAnalysis): AnswerState {
+	if (line.label === "commitment") return "answered";
+	if (line.label === "compliment" || line.label === "hypothetical" || line.label === "fluff") {
+		return "murky";
+	}
+	const text = line.text.trim();
+	if (!text) return "not_asked";
+	const det = detect(text);
+	if (det.commitment !== "none") return "answered";
+	if (det.bad.compliment || det.bad.hypothetical || det.bad.fluff) return "murky";
+	if (/^(yes|yeah|yep|sure|ok|okay|si|sí|claro|dale|va|tengo un momento)\b/i.test(text)) {
+		return "murky";
+	}
+	if (isGenericQuestionResponse(text)) return "murky";
+	if (hasSpecificQuestionAnswerSignal(text)) return "answered";
+	const contentTokens = Array.from(tokenize(text));
+	if (line.label === "fact" && contentTokens.length >= 6 && !text.includes("?")) {
+		return "answered";
+	}
+	return "murky";
+}
+
+function isGenericQuestionResponse(text: string): boolean {
+	const clean = text.trim();
+	const tokens = tokenize(clean);
+	if (
+		tokens.size <= 5 &&
+		/\b(buen[ao]s?|good|great|mejor|herramienta|tool|app|software)\b/i.test(clean) &&
+		!hasSpecificQuestionAnswerSignal(clean)
+	) {
+		return true;
+	}
+	return (
+		/^(una?\s+)?(buena?|good|great)\s+(herramienta|tool|app|software)(\s+para\s+.+)?$/iu.test(clean) &&
+		!hasSpecificQuestionAnswerSignal(clean)
+	);
+}
+
+function hasSpecificQuestionAnswerSignal(text: string): boolean {
+	return (
+		/\d|last|yesterday|today|week|month|paid|lost|uses|takes|customers?|orders?|ayer|hoy|semana|mes|pag[óo]|perd|usa|clientes?|pedidos?/i.test(text) ||
+		/\b(html|responsive|mobile|m[óo]vil|outlook|gmail|mailchimp|hubspot|klaviyo|c[óo]digo|template|plantilla|preview|previsual|spam|render|compatib|integraci[óo]n|automatiz|personaliz|tracking|analytics|im[aá]genes?|assets?|editor|drag|drop|arrastrar)\b/i.test(text) ||
+		/\b(debe|deba|necesit|tiene que|importante|requier|requiere|require|must|should|needs?|soporte|permita|incluya|exporte|integre|evite|resuelva|problema|dolor|falla|error)\b/i.test(text)
+	);
 }
 
 function bestQuestionId(
@@ -638,14 +830,19 @@ function bestQuestionId(
 		qTokens.forEach((token) => {
 			if (tokens.has(token)) overlap += 1;
 		});
-		const score = overlap / Math.max(1, qTokens.size);
+		const coverage = overlap / Math.max(1, qTokens.size);
+		// A seller usually asks a much shorter paraphrase of the stored
+		// question, so also accept strong coverage of the spoken text.
+		const reverseCoverage = overlap / Math.max(1, tokens.size);
+		const qualifies = coverage >= 0.16 || (overlap >= 2 && reverseCoverage >= 0.34);
+		const score = qualifies ? Math.max(coverage, reverseCoverage) : 0;
 		if (score > bestScore) {
 			bestId = question.id;
 			bestScore = score;
 		}
 	});
 
-	return bestScore >= 0.16 ? bestId : null;
+	return bestScore > 0 ? bestId : null;
 }
 
 function tokenize(text: string): Set<string> {
@@ -787,4 +984,8 @@ function clampConfidence(value: number | undefined): number {
 
 function cleanText(value: unknown): string {
 	return typeof value === "string" ? value.trim() : "";
+}
+
+function turnTextKey(value: string): string {
+	return value.replace(/\s+/g, " ").trim().toLowerCase();
 }

@@ -1,7 +1,8 @@
+import { Notice } from "obsidian";
 import type { CRMView } from "../view";
 import { div, span, button, initials } from "../util/dom";
 import { relDays, shortDate } from "../util/dates";
-import { Contact, STATUS_META } from "../types";
+import { Contact, ContactStatus, STATUS_META, STATUS_ORDER } from "../types";
 
 export function renderContacts(root: HTMLElement, view: CRMView): void {
 	const store = view.store;
@@ -13,7 +14,7 @@ export function renderContacts(root: HTMLElement, view: CRMView): void {
 	div(
 		left,
 		"scrm-mono-mini",
-		`${store.data.contacts.length} total · sorted by last contacted`,
+		`${store.data.contacts.length} total · sorted by last talked`,
 	);
 
 	const right = div(head, "scrm-screen-head-right");
@@ -45,6 +46,21 @@ export function renderContacts(root: HTMLElement, view: CRMView): void {
 	void cardsBtn;
 	void tableBtn;
 
+	const importInput = right.createEl("input", {
+		attr: {
+			type: "file",
+			accept: ".csv,.tsv,.txt,.xlsx",
+		},
+	});
+	importInput.addClass("scrm-hidden-file");
+	importInput.addEventListener("change", () => {
+		const file = importInput.files?.[0];
+		if (!file) return;
+		void importContactsFile(file, view, draw).finally(() => {
+			importInput.value = "";
+		});
+	});
+	button(right, "scrm-btn", "import", () => importInput.click());
 	button(right, "scrm-btn scrm-btn-primary", "+ new", () => view.addContact());
 
 	/* results ---------------------------------------------------------------- */
@@ -114,11 +130,10 @@ function drawCards(root: HTMLElement, view: CRMView, list: Contact[]): void {
 		}
 
 		const foot = div(card, "scrm-card-foot");
-		div(
-			foot,
-			"scrm-mono-mini",
-			c.lastContactedAt ? `last talked ${relDays(c.lastContactedAt)}` : `added ${relDays(c.addedAt)}`,
-		);
+		const lastTalkedAt = view.store.lastTalkedAt(c.id);
+		div(foot, "scrm-mono-mini", lastTalkedAt ? `last talked ${relDays(lastTalkedAt)}` : "no talks yet");
+		const created = div(foot, "scrm-mono-mini scrm-muted", `created ${dateTimeFromTs(c.addedAt)}`);
+		created.setAttr("title", new Date(c.addedAt).toLocaleString());
 	}
 
 	// add tile
@@ -131,7 +146,7 @@ function drawCards(root: HTMLElement, view: CRMView, list: Contact[]): void {
 function drawTable(root: HTMLElement, view: CRMView, list: Contact[]): void {
 	const table = div(root, "scrm-table");
 	const header = div(table, "scrm-tr scrm-thead");
-	["NAME", "COMPANY", "CONTACT", "STATUS", "LAST TALK", "LATEST FACT"].forEach((h) =>
+	["NAME", "COMPANY", "CONTACT", "STATUS", "LAST TALK", "CREATED", "LATEST FACT"].forEach((h) =>
 		div(header, "scrm-th", h),
 	);
 
@@ -144,10 +159,150 @@ function drawTable(root: HTMLElement, view: CRMView, list: Contact[]): void {
 		div(row, "scrm-td scrm-mono", c.phone || c.email || "—");
 		const st = div(row, "scrm-td");
 		span(st, `scrm-badge ${meta.cls}`, meta.short);
-		div(row, "scrm-td scrm-mono", c.lastContactedAt ? shortDate(dateFromTs(c.lastContactedAt)) : "—");
+		const lastTalkedAt = view.store.lastTalkedAt(c.id);
+		div(row, "scrm-td scrm-mono", lastTalkedAt ? shortDate(dateFromTs(lastTalkedAt)) : "—");
+		div(row, "scrm-td scrm-mono", shortDate(dateFromTs(c.addedAt)));
 		const next = div(row, "scrm-td scrm-td-next");
 		next.appendText(c.learned || "—");
 	}
+}
+
+async function importContactsFile(
+	file: File,
+	view: CRMView,
+	afterImport: () => void,
+): Promise<void> {
+	if (/\.xlsx$/i.test(file.name)) {
+		new Notice("XLSX import needs parser support. Export from Excel as CSV, then import.");
+		return;
+	}
+	const text = await file.text();
+	const rows = parseDelimited(text);
+	if (rows.length < 2) {
+		new Notice("No prospect rows found.");
+		return;
+	}
+	const headers = rows[0].map(normalizeHeader);
+	const drafts = rows
+		.slice(1)
+		.map((row) => prospectFromRow(headers, row, view))
+		.filter((contact): contact is Partial<Contact> => !!contact);
+	if (!drafts.length) {
+		new Notice("No valid contacts found. Include at least a name column.");
+		return;
+	}
+	view.store.addContacts(drafts);
+	afterImport();
+	new Notice(`Imported ${drafts.length} contact${drafts.length === 1 ? "" : "s"}.`);
+}
+
+function prospectFromRow(
+	headers: string[],
+	row: string[],
+	view: CRMView,
+): Partial<Contact> | null {
+	const value = (...names: string[]) => {
+		const idx = headers.findIndex((header) => names.includes(header));
+		return idx >= 0 ? (row[idx] ?? "").trim() : "";
+	};
+	const name = value("name", "nombre", "contact", "contacto", "prospect", "prospecto");
+	if (!name) return null;
+	const typeName = value("person type", "type", "tipo", "tipo de persona", "person_type");
+	const type = typeName
+		? view.store.data.personTypes.find(
+				(t) => normalizeHeader(t.name) === normalizeHeader(typeName) || t.id === typeName,
+			)
+		: null;
+	return {
+		name,
+		company: value("company", "compania", "compañia", "empresa"),
+		email: value("email", "mail", "correo"),
+		phone: value("phone", "telefono", "teléfono", "celular", "whatsapp"),
+		status: normalizeStatus(value("status", "estado")) ?? undefined,
+		typeId: type?.id ?? null,
+		profileUrl: value(
+			"profile url",
+			"profile",
+			"perfil",
+			"perfil url",
+			"linkedin",
+			"url",
+			"conversation url",
+			"conversation",
+			"conversacion",
+			"conversación",
+		),
+		referredBy: value("referred by", "referido por", "referrer"),
+	};
+}
+
+function normalizeStatus(value: string): ContactStatus | null {
+	const clean = normalizeHeader(value);
+	if (!clean) return null;
+	if ((STATUS_ORDER as string[]).includes(clean)) return clean as ContactStatus;
+	const aliases: Record<string, ContactStatus> = {
+		"to contact": "to_contact",
+		tocontact: "to_contact",
+		nuevo: "to_contact",
+		prospecto: "to_contact",
+		"in conversation": "in_conversation",
+		inconversation: "in_conversation",
+		conversacion: "in_conversation",
+		"en conversacion": "in_conversation",
+		ganado: "won",
+		won: "won",
+		perdido: "lost",
+		lost: "lost",
+	};
+	return aliases[clean] ?? null;
+}
+
+function parseDelimited(text: string): string[][] {
+	const delimiter = text.includes("\t") ? "\t" : ",";
+	const rows: string[][] = [];
+	let row: string[] = [];
+	let cell = "";
+	let quoted = false;
+	for (let i = 0; i < text.length; i++) {
+		const ch = text[i];
+		const next = text[i + 1];
+		if (quoted && ch === '"' && next === '"') {
+			cell += '"';
+			i++;
+			continue;
+		}
+		if (ch === '"') {
+			quoted = !quoted;
+			continue;
+		}
+		if (!quoted && ch === delimiter) {
+			row.push(cell.trim());
+			cell = "";
+			continue;
+		}
+		if (!quoted && (ch === "\n" || ch === "\r")) {
+			if (ch === "\r" && next === "\n") i++;
+			row.push(cell.trim());
+			if (row.some(Boolean)) rows.push(row);
+			row = [];
+			cell = "";
+			continue;
+		}
+		cell += ch;
+	}
+	row.push(cell.trim());
+	if (row.some(Boolean)) rows.push(row);
+	return rows;
+}
+
+function normalizeHeader(value: string): string {
+	return value
+		.trim()
+		.toLowerCase()
+		.normalize("NFD")
+		.replace(/[\u0300-\u036f]/g, "")
+		.replace(/[_-]+/g, " ")
+		.replace(/\s+/g, " ");
 }
 
 function dateFromTs(ts: number): string {
@@ -156,4 +311,13 @@ function dateFromTs(ts: number): string {
 	const m = String(d.getMonth() + 1).padStart(2, "0");
 	const day = String(d.getDate()).padStart(2, "0");
 	return `${y}-${m}-${day}`;
+}
+
+function dateTimeFromTs(ts: number): string {
+	return new Date(ts).toLocaleString("en-US", {
+		month: "short",
+		day: "numeric",
+		hour: "numeric",
+		minute: "2-digit",
+	});
 }

@@ -1,6 +1,7 @@
 import type { CRMView } from "../view";
 import { div, span, button, initials } from "../util/dom";
 import { shortDate } from "../util/dates";
+import { renderConversationComposer } from "./log";
 import {
 	STATUS_META,
 	STATUS_ORDER,
@@ -20,6 +21,7 @@ export function renderDetail(root: HTMLElement, view: CRMView, contactId: string
 		return;
 	}
 	const meta = STATUS_META[c.status];
+	const lastTalkedAt = store.lastTalkedAt(c.id);
 
 	/* header ----------------------------------------------------------------- */
 	const head = div(root, "scrm-detail-head");
@@ -33,20 +35,35 @@ export function renderDetail(root: HTMLElement, view: CRMView, contactId: string
 		"scrm-detail-sub",
 		[c.company, c.phone, c.email].filter(Boolean).join(" · ") || "—",
 	);
+	if (c.profileUrl) {
+		const profileLink = span(idcol, "scrm-chip scrm-chip-link scrm-detail-profile", "open profile");
+		profileLink.addEventListener("click", () => window.open(c.profileUrl, "_blank"));
+	}
+	div(
+		idcol,
+		"scrm-mono-mini scrm-muted",
+		[
+			`created ${dateTimeFromTs(c.addedAt)}`,
+			lastTalkedAt ? `last talked ${shortDate(dateFromTs(lastTalkedAt))}` : "no talks yet",
+		].join(" · "),
+	);
 	span(head, `scrm-badge ${meta.cls}`, meta.short);
 
 	/* action bar ------------------------------------------------------------- */
 	const actions = div(root, "scrm-detail-actions");
-	button(actions, "scrm-btn scrm-btn-primary", "+ log conversation", () =>
-		view.logConversation(c.id),
-	);
 	button(actions, "scrm-btn", "edit", () => view.editContact(c));
+	if (c.profileUrl) {
+		button(actions, "scrm-btn scrm-btn-ghost", "open profile", () => {
+			window.open(c.profileUrl, "_blank");
+		});
+	}
 	button(actions, "scrm-btn scrm-btn-danger", "delete", () => {
 		if (confirm(`Delete ${c.name} and all their conversations?`)) {
 			store.deleteContact(c.id);
 			view.navigate({ screen: "contacts" });
 		}
 	});
+	const conversationControls = div(actions, "scrm-action-controls");
 
 	const seg = div(actions, "scrm-seg scrm-seg-status");
 	for (const s of STATUS_ORDER) {
@@ -59,69 +76,13 @@ export function renderDetail(root: HTMLElement, view: CRMView, contactId: string
 		void b;
 	}
 
-	/* body: history + side --------------------------------------------------- */
+	/* body: composer + side -------------------------------------------------- */
 	const grid = div(root, "scrm-detail-grid");
 
-	// history ------------------------------------------------------------
-	const left = div(grid, "scrm-panel");
-	div(left, "scrm-panel-title", "Conversation log");
-	const convos = store.conversationsFor(c.id);
-	const total = convos.length;
-	if (!total) {
-		div(
-			left,
-			"scrm-empty",
-			c.referredBy
-				? `No conversations yet — referred by ${c.referredBy}. Log the first one.`
-				: "No conversations yet. Log the first one.",
-		);
-	}
-	const timeline = div(left, "scrm-timeline");
-	convos.forEach((cv, i) => renderConversation(timeline, view, cv, total - i));
-
-	// side panel ---------------------------------------------------------
+	// conversation composer ---------------------------------------------
+	const left = div(grid, "scrm-panel scrm-composer-panel");
 	const side = div(grid, "scrm-panel scrm-side");
-
-	// type + coverage
-	const type = store.getType(c.typeId);
-	const typeBox = div(side, "scrm-side-block");
-	const tlabel = div(typeBox, "scrm-panel-label");
-	tlabel.appendText("BIG QUESTIONS FOR THIS TYPE");
-	if (type) {
-		const th = div(typeBox, "scrm-side-typehead");
-		const dot = span(th, "scrm-typedot");
-		dot.style.background = type.color;
-		span(th, "scrm-side-typename", type.name);
-		const cov = store.typeCoverage(type.id);
-		const ql = div(typeBox, "scrm-qcov-list");
-		type.questions.forEach((q, idx) => {
-			const cvg = cov[idx];
-			const rowq = div(ql, "scrm-qcov");
-			span(rowq, "scrm-qcov-n", "Q" + (idx + 1)).style.color = type.color;
-			div(rowq, "scrm-qcov-text", q.text);
-			const st = cvg?.state ?? "open";
-			const badge =
-				st === "answered"
-					? `ANSWERED ×${cvg.answered}`
-					: st === "murky"
-						? `MURKY ×${cvg.murky}`
-						: "OPEN";
-			span(rowq, `scrm-cov scrm-cov-${st}`, badge);
-		});
-	} else {
-		div(typeBox, "scrm-muted", "No type set — ");
-		const link = span(typeBox.lastElementChild as HTMLElement, "scrm-link scrm-accent", "assign one");
-		link.addEventListener("click", () => view.editContact(c));
-	}
-
-	// Mom Test reminder
-	const reminder = div(side, "scrm-momtest");
-	div(reminder, "scrm-panel-label scrm-accent", "MOM TEST REMINDER");
-	div(
-		reminder,
-		"scrm-momtest-text",
-		"Talk about their life, not your idea. Ask for specifics in the past, not opinions about the future. Compliments, fluff and hypotheticals are not data — real commitments of time, money or reputation are.",
-	);
+	renderConversationComposer(left, view, contactId, side, conversationControls);
 }
 
 function renderConversation(
@@ -190,6 +151,24 @@ function renderConversation(
 		});
 	}
 
+	if (cv.transcript?.trim()) {
+		const transcript = div(detail, "scrm-tl-transcript");
+		div(transcript, "scrm-tl-detail-label", "Transcript");
+		transcript.createEl("pre", {
+			cls: "scrm-tl-transcript-text",
+			text: cv.transcript.trim(),
+		});
+	}
+
+	if (cv.notes?.trim()) {
+		const notes = div(detail, "scrm-tl-transcript");
+		div(notes, "scrm-tl-detail-label", "Notes");
+		notes.createEl("pre", {
+			cls: "scrm-tl-transcript-text",
+			text: cv.notes.trim(),
+		});
+	}
+
 	if (cv.questionAnswers.length) {
 		const contact = view.store.getContact(cv.contactId);
 		const type = view.store.getType(contact?.typeId ?? null);
@@ -244,4 +223,21 @@ function conversationLinkPlaceholder(channel: Conversation["channel"]): string {
 		case "other":
 			return "Paste channel URL";
 	}
+}
+
+function dateFromTs(ts: number): string {
+	const d = new Date(ts);
+	const y = d.getFullYear();
+	const m = String(d.getMonth() + 1).padStart(2, "0");
+	const day = String(d.getDate()).padStart(2, "0");
+	return `${y}-${m}-${day}`;
+}
+
+function dateTimeFromTs(ts: number): string {
+	return new Date(ts).toLocaleString("en-US", {
+		month: "short",
+		day: "numeric",
+		hour: "numeric",
+		minute: "2-digit",
+	});
 }
