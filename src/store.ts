@@ -4,6 +4,7 @@ import {
 	Conversation,
 	CRMData,
 	Channel,
+	AnswerState,
 	DEFAULT_CONTACT_STATUS,
 	PersonType,
 } from "./types";
@@ -50,6 +51,15 @@ export interface TypeCoverage {
 	answered: number;
 	murky: number;
 	state: "answered" | "murky" | "open";
+	responses: TypeQuestionResponse[];
+}
+
+export interface TypeQuestionResponse {
+	contactId: string;
+	contactName: string;
+	date: string;
+	state: AnswerState;
+	response: string;
 }
 
 /**
@@ -391,7 +401,12 @@ export class CRMStore {
 			.sort((a, b) => {
 				const aTalkedAt = this.lastTalkedAt(a.id);
 				const bTalkedAt = this.lastTalkedAt(b.id);
-				return (bTalkedAt ?? b.addedAt) - (aTalkedAt ?? a.addedAt);
+				if (aTalkedAt !== null || bTalkedAt !== null) {
+					if (aTalkedAt === null) return 1;
+					if (bTalkedAt === null) return -1;
+					return bTalkedAt - aTalkedAt || b.addedAt - a.addedAt;
+				}
+				return b.addedAt - a.addedAt;
 			})
 			.slice(0, limit);
 	}
@@ -408,20 +423,36 @@ export class CRMStore {
 	typeCoverage(typeId: string): TypeCoverage[] {
 		const type = this.getType(typeId);
 		if (!type) return [];
-		const contactIds = new Set(
-			this.contactsOfType(typeId).map((c) => c.id),
+		const contactById = new Map<string, Contact>(
+			this.contactsOfType(typeId).map((c) => [c.id, c] as const),
 		);
-		const relevant = this.data.conversations.filter((cv) =>
-			contactIds.has(cv.contactId),
-		);
+		const relevant = this.data.conversations
+			.filter((cv) => contactById.has(cv.contactId))
+			.sort(
+				(a, b) =>
+					parseISO(b.date).getTime() - parseISO(a.date).getTime() ||
+					b.createdAt - a.createdAt,
+			);
 		return type.questions.map((q) => {
 			let answered = 0;
 			let murky = 0;
+			const responses: TypeQuestionResponse[] = [];
 			for (const cv of relevant) {
 				const qa = cv.questionAnswers.find((a) => a.questionId === q.id);
 				if (!qa) continue;
 				if (qa.state === "answered") answered++;
 				else if (qa.state === "murky") murky++;
+				const response = qa.response?.trim();
+				if (!response) continue;
+				const contact = contactById.get(cv.contactId);
+				if (!contact) continue;
+				responses.push({
+					contactId: contact.id,
+					contactName: contact.name,
+					date: cv.date,
+					state: qa.state,
+					response,
+				});
 			}
 			return {
 				question: q.text,
@@ -429,6 +460,7 @@ export class CRMStore {
 				answered,
 				murky,
 				state: answered > 0 ? "answered" : murky > 0 ? "murky" : "open",
+				responses: responses.slice(0, 3),
 			};
 		});
 	}

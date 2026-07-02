@@ -96,9 +96,33 @@ export default class SalesCRMPlugin extends Plugin {
 				defaultPersonTypeId,
 				contacts: (raw.contacts ?? []).map((contact) => ({
 					...contact,
+					company: contact.company ?? "",
+					phone: contact.phone ?? "",
+					email: contact.email ?? "",
 					profileUrl: contact.profileUrl ?? "",
+					learned: contact.learned ?? "",
+					nextStepText: contact.nextStepText ?? "",
+					nextStepDate: contact.nextStepDate ?? "",
+					referredBy: contact.referredBy ?? "",
 				})),
-				conversations: raw.conversations ?? [],
+				// Older records predate some fields (e.g. transcript/notes); fill
+				// defaults so render code can rely on the Conversation shape.
+				conversations: (raw.conversations ?? []).map((conv) => ({
+					...conv,
+					channel:
+						conv.channel && conv.channel in CHANNEL_META
+							? conv.channel
+							: DEFAULT_CONVERSATION_CHANNEL,
+					conversationUrl: conv.conversationUrl ?? "",
+					transcript: conv.transcript ?? "",
+					notes: conv.notes ?? "",
+					facts: conv.facts ?? "",
+					commitment: conv.commitment ?? "none",
+					badData: Array.isArray(conv.badData) ? conv.badData : [],
+					questionAnswers: Array.isArray(conv.questionAnswers) ? conv.questionAnswers : [],
+					nextStep: conv.nextStep ?? "",
+					outcome: conv.outcome ?? "advancing",
+				})),
 				personTypes,
 			},
 			isFirstRun: false,
