@@ -1,0 +1,26 @@
+{
+	"name": "sales-crm",
+	"version": "1.0.0",
+	"description": "A lightweight sales CRM for Obsidian built around The Mom Test and Traction.",
+	"main": "main.js",
+	"scripts": {
+		"dev": "node esbuild.config.mjs",
+		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
+	},
+	"keywords": [
+		"obsidian",
+		"crm",
+		"sales",
+		"mom-test"
+	],
+	"author": "andreponce",
+	"license": "MIT",
+	"devDependencies": {
+		"@types/node": "^20.11.0",
+		"builtin-modules": "^3.3.0",
+		"esbuild": "0.20.2",
+		"obsidian": "^1.5.7",
+		"tslib": "^2.6.2",
+		"typescript": "^5.4.5"
+	}
+}

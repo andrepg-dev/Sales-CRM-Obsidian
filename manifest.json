@@ -1,0 +1,9 @@
+{
+	"id": "sales-crm",
+	"name": "Sales CRM",
+	"version": "1.0.0",
+	"minAppVersion": "1.4.0",
+	"description": "A lightweight sales CRM built around The Mom Test and Traction: capture what you learn from every conversation, track real commitments, and review your week. Data lives in your vault.",
+	"author": "andreponce",
+	"isDesktopOnly": false
+}
