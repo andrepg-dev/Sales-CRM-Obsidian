@@ -1,6 +1,6 @@
 import type { CRMView } from "../view";
 import { div, span, button, initials } from "../util/dom";
-import { relDays, relFuture, shortDate } from "../util/dates";
+import { relDays, shortDate } from "../util/dates";
 import { Contact, STATUS_META } from "../types";
 
 export function renderContacts(root: HTMLElement, view: CRMView): void {
@@ -119,14 +119,6 @@ function drawCards(root: HTMLElement, view: CRMView, list: Contact[]): void {
 			"scrm-mono-mini",
 			c.lastContactedAt ? `last talked ${relDays(c.lastContactedAt)}` : `added ${relDays(c.addedAt)}`,
 		);
-		if (c.nextStepText) {
-			const when = relFuture(c.nextStepDate);
-			div(
-				foot,
-				"scrm-card-next",
-				`Next: ${c.nextStepText}${when ? " · " + when : ""}`,
-			);
-		}
 	}
 
 	// add tile
@@ -139,7 +131,7 @@ function drawCards(root: HTMLElement, view: CRMView, list: Contact[]): void {
 function drawTable(root: HTMLElement, view: CRMView, list: Contact[]): void {
 	const table = div(root, "scrm-table");
 	const header = div(table, "scrm-tr scrm-thead");
-	["NAME", "COMPANY", "CONTACT", "STATUS", "LAST TALK", "NEXT STEP"].forEach((h) =>
+	["NAME", "COMPANY", "CONTACT", "STATUS", "LAST TALK", "LATEST FACT"].forEach((h) =>
 		div(header, "scrm-th", h),
 	);
 
@@ -154,12 +146,7 @@ function drawTable(root: HTMLElement, view: CRMView, list: Contact[]): void {
 		span(st, `scrm-badge ${meta.cls}`, meta.short);
 		div(row, "scrm-td scrm-mono", c.lastContactedAt ? shortDate(dateFromTs(c.lastContactedAt)) : "—");
 		const next = div(row, "scrm-td scrm-td-next");
-		if (c.nextStepText) {
-			const when = relFuture(c.nextStepDate);
-			next.appendText(c.nextStepText + (when ? " · " + when.toLowerCase() : ""));
-		} else {
-			next.appendText("—");
-		}
+		next.appendText(c.learned || "—");
 	}
 }
 

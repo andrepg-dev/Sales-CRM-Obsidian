@@ -70,13 +70,18 @@ export class CRMView extends ItemView {
 	}
 
 	openContact(id: string): void {
+		this.logConversation(id);
+	}
+	openConversationLog(id: string): void {
 		this.navigate({ screen: "contacts", contactId: id });
 	}
 
 	/* actions ---------------------------------------------------------------- */
 
 	addContact(): void {
-		new ContactModal(this.app, this.store, null).open();
+		new ContactModal(this.app, this.store, null, (contact, wasNew) => {
+			if (wasNew) this.logConversation(contact.id);
+		}).open();
 	}
 	editContact(c: Contact): void {
 		new ContactModal(this.app, this.store, c).open();

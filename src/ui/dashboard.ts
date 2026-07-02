@@ -1,6 +1,5 @@
 import type { CRMView } from "../view";
 import { div, span, button, initials } from "../util/dom";
-import { relFuture } from "../util/dates";
 
 export function renderDashboard(root: HTMLElement, view: CRMView): void {
 	const store = view.store;
@@ -79,14 +78,14 @@ export function renderDashboard(root: HTMLElement, view: CRMView): void {
 	// up next ------------------------------------------------------------
 	const nextCol = div(cols, "scrm-panel");
 	const nextHead = div(nextCol, "scrm-panel-head");
-	div(nextHead, "scrm-panel-title", "Up next");
+	div(nextHead, "scrm-panel-title", "Active conversations");
 	const viewAll = div(nextHead, "scrm-mono-mini scrm-accent scrm-link", "VIEW ALL →");
 	viewAll.addEventListener("click", () => view.navigate({ screen: "contacts" }));
 
 	const list = div(nextCol, "scrm-uplist");
 	const upcoming = store.upNext(4);
 	if (!upcoming.length) {
-		div(list, "scrm-empty", "Nothing scheduled. Add a next step on a contact.");
+		div(list, "scrm-empty", "No active internet conversations yet.");
 	}
 	for (const c of upcoming) {
 		const row = div(list, "scrm-uprow");
@@ -94,13 +93,10 @@ export function renderDashboard(root: HTMLElement, view: CRMView): void {
 		div(row, "scrm-avatar", initials(c.name));
 		const mid = div(row, "scrm-uprow-mid");
 		div(mid, "scrm-uprow-name", c.name);
-		div(mid, "scrm-uprow-sub", [c.company, c.nextStepText].filter(Boolean).join(" · "));
-		const when = relFuture(c.nextStepDate);
 		span(
 			row,
-			"scrm-mono-mini " +
-				(when === "TODAY" || when === "OVERDUE" ? "scrm-accent" : "scrm-muted"),
-			when || "—",
+			"scrm-mono-mini scrm-muted",
+			c.lastContactedAt ? "LOGGED" : "NEW",
 		);
 	}
 

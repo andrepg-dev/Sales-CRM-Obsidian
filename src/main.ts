@@ -1,5 +1,5 @@
 import { Plugin, WorkspaceLeaf, Notice } from "obsidian";
-import { CRMData } from "./types";
+import { CHANNEL_META, CRMData, DEFAULT_CONVERSATION_CHANNEL } from "./types";
 import { seedData, emptyData } from "./seed";
 import { CRMStore } from "./store";
 import { CRMView, VIEW_TYPE_CRM } from "./view";
@@ -33,7 +33,11 @@ export default class SalesCRMPlugin extends Plugin {
 		this.addCommand({
 			id: "sales-crm-new-contact",
 			name: "New contact",
-			callback: () => new ContactModal(this.app, this.store, null).open(),
+			callback: () =>
+				new ContactModal(this.app, this.store, null, (contact, wasNew) => {
+					if (!wasNew) return;
+					void this.activateView().then(() => this.openLog(contact.id));
+				}).open(),
 		});
 
 		this.addCommand({
@@ -78,6 +82,11 @@ export default class SalesCRMPlugin extends Plugin {
 			data: {
 				version: raw.version ?? DATA_VERSION,
 				weeklyGoal: raw.weeklyGoal ?? 10,
+				defaultConversationChannel:
+					raw.defaultConversationChannel &&
+					raw.defaultConversationChannel in CHANNEL_META
+						? raw.defaultConversationChannel
+						: DEFAULT_CONVERSATION_CHANNEL,
 				contacts: raw.contacts ?? [],
 				conversations: raw.conversations ?? [],
 				personTypes: raw.personTypes ?? [],
@@ -95,5 +104,11 @@ export default class SalesCRMPlugin extends Plugin {
 			await leaf.setViewState({ type: VIEW_TYPE_CRM, active: true });
 		}
 		workspace.revealLeaf(leaf);
+	}
+
+	private openLog(contactId: string): void {
+		const leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE_CRM)[0];
+		const view = leaf?.view;
+		if (view instanceof CRMView) view.logConversation(contactId);
 	}
 }

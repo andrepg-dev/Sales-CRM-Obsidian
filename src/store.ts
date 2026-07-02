@@ -3,6 +3,7 @@ import {
 	ContactStatus,
 	Conversation,
 	CRMData,
+	Channel,
 	DEFAULT_CONTACT_STATUS,
 	PersonType,
 } from "./types";
@@ -161,6 +162,7 @@ export class CRMStore {
 			id: this.uid("cv"),
 			createdAt: Date.now(),
 		};
+		this.data.defaultConversationChannel = cv.channel;
 		this.data.conversations.push(cv);
 
 		// Roll the conversation forward into the contact's summary fields.
@@ -169,13 +171,19 @@ export class CRMStore {
 			c.lastContactedAt = parseISO(cv.date).getTime();
 			const learned = firstLine(cv.facts);
 			if (learned) c.learned = learned;
-			if (cv.nextStep) c.nextStepText = cv.nextStep;
 			if (c.status === "to_contact" && cv.outcome !== "dead") {
 				c.status = "in_conversation";
 			}
 		}
 		this.commit();
 		return cv;
+	}
+
+	updateConversation(id: string, patch: Partial<Conversation>): void {
+		const cv = this.data.conversations.find((conversation) => conversation.id === id);
+		if (!cv) return;
+		Object.assign(cv, patch);
+		this.commit();
 	}
 
 	deleteConversation(id: string): void {
@@ -237,6 +245,12 @@ export class CRMStore {
 		this.commit();
 	}
 
+	rememberConversationChannel(channel: Channel): void {
+		if (this.data.defaultConversationChannel === channel) return;
+		this.data.defaultConversationChannel = channel;
+		void this.persist(this.data);
+	}
+
 	/* ------------------------------------------------------------------ selectors */
 
 	private distinctContactsInWeek(key: string): Set<string> {
@@ -295,13 +309,10 @@ export class CRMStore {
 		return this.data.contacts
 			.filter(
 				(c) =>
-					c.nextStepText &&
 					(c.status === "to_contact" || c.status === "in_conversation"),
 			)
 			.sort((a, b) => {
-				const da = a.nextStepDate || "9999-12-31";
-				const db = b.nextStepDate || "9999-12-31";
-				return da.localeCompare(db);
+				return (b.lastContactedAt ?? b.addedAt) - (a.lastContactedAt ?? a.addedAt);
 			})
 			.slice(0, limit);
 	}

@@ -1,6 +1,5 @@
 import type { CRMView } from "../view";
 import { div, span } from "../util/dom";
-import { relFuture } from "../util/dates";
 import { Contact, ContactStatus, STATUS_META, STATUS_ORDER } from "../types";
 
 export function renderPipeline(root: HTMLElement, view: CRMView): void {
@@ -66,11 +65,10 @@ function renderCard(
 	const latest = view.store.conversationsFor(c.id)[0];
 
 	if (status === "to_contact") {
-		const when = relFuture(c.nextStepDate);
 		div(
 			card,
-			"scrm-mono-mini " + (when ? "scrm-accent" : "scrm-muted"),
-			c.nextStepText ? `${c.nextStepText.toUpperCase()}${when ? " · " + when : ""}` : "NO DATE SET",
+			"scrm-mono-mini scrm-muted",
+			c.referredBy ? `REFERRED BY ${c.referredBy.toUpperCase()}` : "READY TO LOG",
 		);
 	} else if (status === "in_conversation") {
 		const row = div(card, "scrm-pcard-signal");
@@ -79,10 +77,7 @@ function renderCard(
 		} else if (latest?.outcome === "stalled") {
 			span(row, "scrm-mini-tag scrm-tag-stall", "⚠ STALLING");
 		}
-		const when = relFuture(c.nextStepDate);
-		if (c.nextStepText) {
-			span(row, "scrm-mono-mini scrm-accent", `${c.nextStepText}${when ? " · " + when : ""}`);
-		}
+		span(row, "scrm-mono-mini scrm-accent", c.learned || "PASTE NEXT CHAT");
 	} else {
 		// won / lost — keep the lesson
 		if (c.learned) {

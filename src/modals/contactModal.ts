@@ -7,6 +7,7 @@ import { textField, textAreaField, selectField, modalFooter } from "./formkit";
 export class ContactModal extends Modal {
 	private store: CRMStore;
 	private existing: Contact | null;
+	private afterSave?: (contact: Contact, wasNew: boolean) => void;
 	private draft: {
 		name: string;
 		company: string;
@@ -15,15 +16,19 @@ export class ContactModal extends Modal {
 		status: ContactStatus;
 		typeId: string | null;
 		learned: string;
-		nextStepText: string;
-		nextStepDate: string;
 		referredBy: string;
 	};
 
-	constructor(app: App, store: CRMStore, existing: Contact | null) {
+	constructor(
+		app: App,
+		store: CRMStore,
+		existing: Contact | null,
+		afterSave?: (contact: Contact, wasNew: boolean) => void,
+	) {
 		super(app);
 		this.store = store;
 		this.existing = existing;
+		this.afterSave = afterSave;
 		this.draft = {
 			name: existing?.name ?? "",
 			company: existing?.company ?? "",
@@ -32,8 +37,6 @@ export class ContactModal extends Modal {
 			status: existing?.status ?? DEFAULT_CONTACT_STATUS,
 			typeId: existing?.typeId ?? null,
 			learned: existing?.learned ?? "",
-			nextStepText: existing?.nextStepText ?? "",
-			nextStepDate: existing?.nextStepDate ?? "",
 			referredBy: existing?.referredBy ?? "",
 		};
 	}
@@ -76,24 +79,15 @@ export class ContactModal extends Modal {
 			(v) => (this.draft.typeId = v || null),
 		);
 
-		textField(grid, "Next step", this.draft.nextStepText, (v) => (this.draft.nextStepText = v), {
-			placeholder: "e.g. Demo with her barista",
-		});
-		textField(
-			grid,
-			"Next step date",
-			this.draft.nextStepDate,
-			(v) => (this.draft.nextStepDate = v),
-			{ type: "date" },
-		);
-
-		textAreaField(
-			contentEl,
-			"Latest learning",
-			this.draft.learned,
-			(v) => (this.draft.learned = v),
-			{ desc: "A fact about their life — not an opinion about your idea." },
-		);
+		if (this.existing) {
+			textAreaField(
+				contentEl,
+				"Latest learning",
+				this.draft.learned,
+				(v) => (this.draft.learned = v),
+				{ desc: "A fact about their life — not an opinion about your idea." },
+			);
+		}
 		textField(contentEl, "Referred by", this.draft.referredBy, (v) => (this.draft.referredBy = v), {
 			placeholder: "Who introduced them?",
 		});
@@ -110,9 +104,17 @@ export class ContactModal extends Modal {
 			new Notice("Name is required.");
 			return;
 		}
-		if (this.existing) this.store.updateContact(this.existing.id, this.draft);
-		else this.store.addContact(this.draft);
+		let contact: Contact;
+		let wasNew = false;
+		if (this.existing) {
+			this.store.updateContact(this.existing.id, this.draft);
+			contact = this.existing;
+		} else {
+			contact = this.store.addContact(this.draft);
+			wasNew = true;
+		}
 		this.close();
+		this.afterSave?.(contact, wasNew);
 	}
 
 	onClose(): void {

@@ -16,7 +16,17 @@ export type Outcome = "advancing" | "stalled" | "dead";
 /** The kind of real commitment a prospect gave up, if any. */
 export type Commitment = "time" | "reputation" | "money" | "none";
 
-export type Channel = "call" | "whatsapp" | "in_person" | "email" | "other";
+export type Channel =
+	| "linkedin"
+	| "whatsapp"
+	| "email"
+	| "instagram"
+	| "facebook"
+	| "x"
+	| "website"
+	| "other";
+
+export const DEFAULT_CONVERSATION_CHANNEL: Channel = "linkedin";
 
 /** Whether one of the type's "3 big questions" got answered in a conversation. */
 export type AnswerState = "answered" | "murky" | "not_asked";
@@ -55,6 +65,7 @@ export interface Conversation {
 	/** ISO date (yyyy-mm-dd) the conversation happened. */
 	date: string;
 	channel: Channel;
+	conversationUrl: string;
 	/** Specifics about their life — not opinions about your idea. */
 	facts: string;
 	commitment: Commitment;
@@ -90,6 +101,7 @@ export interface CRMData {
 	version: number;
 	/** Weekly conversation goal (Traction rock). */
 	weeklyGoal: number;
+	defaultConversationChannel: Channel;
 	contacts: Contact[];
 	conversations: Conversation[];
 	personTypes: PersonType[];
@@ -126,10 +138,13 @@ export const OUTCOME_META: Record<Outcome, { label: string }> = {
 };
 
 export const CHANNEL_META: Record<Channel, { label: string }> = {
-	call: { label: "Call" },
+	linkedin: { label: "LinkedIn" },
 	whatsapp: { label: "WhatsApp" },
-	in_person: { label: "In person" },
 	email: { label: "Email" },
+	instagram: { label: "Instagram" },
+	facebook: { label: "Facebook" },
+	x: { label: "X / Twitter" },
+	website: { label: "Website" },
 	other: { label: "Other" },
 };
 
