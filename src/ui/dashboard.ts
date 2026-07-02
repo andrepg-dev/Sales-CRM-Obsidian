@@ -1,6 +1,7 @@
 import type { CRMView } from "../view";
 import { div, span, button, initials } from "../util/dom";
 import { relDays } from "../util/dates";
+import type { Contact } from "../types";
 
 export function renderDashboard(root: HTMLElement, view: CRMView): void {
 	const store = view.store;
@@ -105,13 +106,21 @@ export function renderDashboard(root: HTMLElement, view: CRMView): void {
 		div(row, "scrm-avatar", initials(c.name));
 		const mid = div(row, "scrm-uprow-mid");
 		div(mid, "scrm-uprow-name", c.name);
-		const created = div(mid, "scrm-uprow-sub", `created ${relDays(c.addedAt)}`);
-		created.setAttr("title", new Date(c.addedAt).toLocaleString());
-		span(
-			row,
-			"scrm-mono-mini scrm-muted",
-			store.lastTalkedAt(c.id) ? "LOGGED" : "NEW",
-		);
+		const lastTalkedAt = store.lastTalkedAt(c.id);
+		const when = lastTalkedAt ?? c.addedAt;
+		const whenLabel = lastTalkedAt ? `last talked ${relDays(lastTalkedAt)}` : `created ${relDays(c.addedAt)}`;
+		const created = div(mid, "scrm-uprow-sub", whenLabel);
+		created.setAttr("title", new Date(when).toLocaleString());
+		const state = div(row, "scrm-uprow-badges");
+		span(state, "scrm-mono-mini scrm-muted", lastTalkedAt ? "LOGGED" : "NEW");
+		const reply = replyState(view, c);
+		if (reply) {
+			span(
+				state,
+				`scrm-badge scrm-reply-badge scrm-reply-${reply}`,
+				reply === "replied" ? "REPLIED" : "NO REPLY",
+			);
+		}
 	}
 
 	const learn = store.latestLearning();
@@ -120,6 +129,80 @@ export function renderDashboard(root: HTMLElement, view: CRMView): void {
 		div(box, "scrm-panel-label", "LATEST LEARNING");
 		div(box, "scrm-learnbox-text", `“${learn}”`);
 	}
+}
+
+function replyState(view: CRMView, contact: Contact): "replied" | "waiting" | null {
+	const latest = view.store.conversationsFor(contact.id)[0];
+	if (!latest?.transcript.trim()) return null;
+	if (latest.facts.trim() || latest.questionAnswers.length || latest.commitment !== "none") {
+		return "replied";
+	}
+	return transcriptHasProspectReply(latest.transcript, contact.name) ? "replied" : "waiting";
+}
+
+function transcriptHasProspectReply(transcript: string, contactName: string): boolean {
+	const turns = splitTranscriptTurns(transcript);
+	if (turns.length < 2) return false;
+	const firstSpeaker = speakerKey(turns.find((turn) => turn.speaker)?.speaker ?? "");
+	if (!firstSpeaker) return false;
+	const contactKey = speakerKey(contactName);
+	return turns.slice(1).some((turn) => {
+		const key = speakerKey(turn.speaker ?? "");
+		if (!key) return false;
+		if (contactKey && (key === contactKey || key.includes(contactKey) || contactKey.includes(key))) {
+			return true;
+		}
+		return key !== firstSpeaker;
+	});
+}
+
+function splitTranscriptTurns(transcript: string): { speaker: string | null; text: string }[] {
+	const lines = transcript
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter(Boolean);
+	const turns: { speaker: string | null; text: string }[] = [];
+	let current: { speaker: string | null; chunks: string[] } | null = null;
+	let foundSpeaker = false;
+	const flush = () => {
+		if (!current) return;
+		const text = current.chunks.join("\n").trim();
+		if (text) turns.push({ speaker: current.speaker, text });
+		current = null;
+	};
+	for (const line of lines) {
+		if (isSpeakerHeader(line)) {
+			foundSpeaker = true;
+			flush();
+			current = { speaker: line, chunks: [] };
+			continue;
+		}
+		if (!current) current = { speaker: null, chunks: [] };
+		current.chunks.push(line);
+	}
+	flush();
+	return foundSpeaker ? turns : [];
+}
+
+function isSpeakerHeader(value: string): boolean {
+	if (/[?¿!¡.,;:]/.test(value)) return false;
+	const words = value.split(/\s+/).filter(Boolean);
+	if (words.length < 1 || words.length > 5) return false;
+	const letters = value.replace(/[^\p{L}\p{M}]/gu, "");
+	if (letters.length < 2) return false;
+	const isAllCaps =
+		letters === letters.toLocaleUpperCase() && letters !== letters.toLocaleLowerCase();
+	const isNameCase = words.every((word) => /^[\p{Lu}][\p{L}\p{M}'-]*$/u.test(word));
+	return isAllCaps || isNameCase;
+}
+
+function speakerKey(value: string): string {
+	return value
+		.toLowerCase()
+		.normalize("NFD")
+		.replace(/[\u0300-\u036f]/g, "")
+		.replace(/[^a-z0-9]+/g, " ")
+		.trim();
 }
 
 function renderEmptyHero(root: HTMLElement, view: CRMView): void {

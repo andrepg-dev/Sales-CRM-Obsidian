@@ -17,7 +17,6 @@ import {
 	Commitment,
 	Outcome,
 	CHANNEL_META,
-	COMMITMENT_META,
 	BAD_DATA_META,
 	DEFAULT_CONVERSATION_CHANNEL,
 } from "../types";
@@ -185,7 +184,6 @@ function renderConversationComposerInternal(
 	const notesStatus = div(notesField, "scrm-mono-mini scrm-muted");
 
 	const questionsPanel = side ? div(side, "scrm-side-block") : null;
-	const signalSummary = div(side ?? main, "scrm-ai-signals");
 	chatInput.addEventListener("input", () => {
 		autoSizeTextarea(chatInput);
 		analysisRunId++;
@@ -196,7 +194,6 @@ function renderConversationComposerInternal(
 		answerResponses.clear();
 		paintConversationBadges();
 		paintSideQuestions();
-		signalSummary.empty();
 		scheduleAutoAnalysis();
 	});
 	notesInput.addEventListener("input", () => {
@@ -244,7 +241,6 @@ function renderConversationComposerInternal(
 
 	function paintLoadedConversation(): void {
 		paintConversationBadges();
-		paintSignalSummary();
 		paintSideQuestions();
 	}
 
@@ -298,7 +294,6 @@ function renderConversationComposerInternal(
 
 		analysisApplied = true;
 		paintConversationBadges();
-		paintSignalSummary();
 		paintSideQuestions();
 	}
 
@@ -348,35 +343,6 @@ function renderConversationComposerInternal(
 						: "OPEN";
 			span(rowq, `scrm-cov scrm-cov-${state}`, badge);
 		});
-	}
-
-	function paintSignalSummary(): void {
-		signalSummary.empty();
-		if (!analysisApplied) return;
-
-		div(signalSummary, "scrm-panel-label", "QWEN DECISIONS");
-		const commitmentRow = div(signalSummary, "scrm-ai-signal-row");
-		span(commitmentRow, "scrm-mono-mini scrm-muted", "COMMITMENT");
-		const commitment = COMMITMENT_META[state.commitment];
-		span(commitmentRow, "scrm-chip scrm-chip-commit", `${commitment.icon} ${commitment.label}`);
-
-		const badRow = div(signalSummary, "scrm-ai-signal-row scrm-ai-bad-row");
-		span(badRow, "scrm-mono-mini scrm-muted", "BAD DATA");
-		const badChips = div(badRow, "scrm-ai-bad-chips");
-		let badCount = 0;
-		bad.forEach((entry, kind) => {
-			if (!entry.on) return;
-			const meta = BAD_DATA_META[kind];
-			span(
-				badChips,
-				"scrm-chip scrm-chip-bad",
-				`${meta.icon} ${meta.label}${entry.note ? `: ${clip(entry.note, 42)}` : ""}`,
-			);
-			badCount++;
-		});
-		if (!badCount) {
-			span(badChips, "scrm-chip", "none");
-		}
 	}
 
 	function paintAnalysisResult(result: ConversationAnalysisResult): void {

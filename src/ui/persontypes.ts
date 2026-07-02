@@ -1,5 +1,6 @@
 import type { CRMView } from "../view";
 import { div, span, button } from "../util/dom";
+import { shortDate } from "../util/dates";
 import { PersonType } from "../types";
 
 export function renderPersonTypes(root: HTMLElement, view: CRMView): void {
@@ -22,7 +23,7 @@ export function renderPersonTypes(root: HTMLElement, view: CRMView): void {
 	span(
 		note,
 		"scrm-rule-text",
-		"Keep one list of big questions per type of person. No need to repeat answered ones — pick up where you left off.",
+		"Keep one list of big questions per type of person. Latest answers show up under each question, so you can pick up where you left off.",
 	);
 }
 
@@ -40,11 +41,30 @@ function renderTypeCard(parent: HTMLElement, view: CRMView, t: PersonType): void
 	const cov = store.typeCoverage(t.id);
 	const qlist = div(card, "scrm-type-qs");
 	t.questions.forEach((q, idx) => {
-		const cvg = cov[idx];
+		const cvg = cov[idx] ?? { answered: 0, murky: 0, state: "open" as const, responses: [] };
 		const row = div(qlist, "scrm-qcov");
 		span(row, "scrm-qcov-n", "Q" + (idx + 1)).style.color = t.color;
-		div(row, "scrm-qcov-text" + (q.text ? "" : " scrm-muted"), q.text || "(empty question)");
-		const st = cvg?.state ?? "open";
+		const main = div(row, "scrm-qcov-main");
+		div(main, "scrm-qcov-text" + (q.text ? "" : " scrm-muted"), q.text || "(empty question)");
+		if (cvg.responses.length) {
+			const responses = div(main, "scrm-qcov-responses");
+			cvg.responses.forEach((answer) => {
+				const item = div(responses, "scrm-qcov-response");
+				div(
+					item,
+					"scrm-qcov-response-meta",
+					`${answer.contactName} · ${shortDate(answer.date)} · ${answer.state.toUpperCase()}`,
+				);
+				div(item, "scrm-qcov-response-text", answer.response);
+			});
+		} else if (cvg.state !== "open") {
+			div(
+				main,
+				"scrm-qcov-response scrm-qcov-response-empty",
+				"No response text captured for this answer yet.",
+			);
+		}
+		const st = cvg.state;
 		const badge =
 			st === "answered"
 				? `ANSWERED ×${cvg.answered}`

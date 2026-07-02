@@ -31,15 +31,17 @@
 
 /* ---- shell ---------------------------------------------------------------- */
 
-.scrm-root.view-content {
+.scrm-root {
 	padding: 0;
 	background: var(--scrm-paper);
+	height: 100%;
 	overflow: auto;
 }
 .scrm-wrap {
 	font-family: var(--scrm-sans);
 	color: var(--scrm-ink);
 	width: 100%;
+	min-height: 100%;
 	margin: 0;
 	padding: 0 0 60px;
 }
@@ -204,6 +206,9 @@
 .scrm-btn-danger:hover {
 	background: var(--scrm-red-bg);
 }
+.scrm-hidden-file {
+	display: none;
+}
 
 .scrm-avatar {
 	width: 34px;
@@ -234,6 +239,21 @@
 	font: 500 9.5px var(--scrm-mono);
 	padding: 3px 8px;
 	white-space: nowrap;
+}
+.scrm-card-badges {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	gap: 5px;
+	flex: none;
+}
+.scrm-reply-replied {
+	background: var(--scrm-green-bg);
+	color: var(--scrm-green);
+}
+.scrm-reply-waiting {
+	background: var(--scrm-red-bg);
+	color: var(--scrm-red);
 }
 .scrm-st-tocontact {
 	background: #f4f4f4;
@@ -504,6 +524,13 @@
 	min-width: 0;
 	flex: 1;
 }
+.scrm-uprow-badges {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	gap: 5px;
+	flex: none;
+}
 .scrm-uprow-name {
 	font-size: 12.5px;
 	font-weight: 600;
@@ -683,6 +710,10 @@
 	font-size: 11.5px;
 	color: var(--scrm-muted);
 }
+.scrm-detail-profile {
+	width: fit-content;
+	margin-top: 4px;
+}
 .scrm-detail-actions {
 	display: flex;
 	gap: 8px;
@@ -783,15 +814,37 @@
 	flex: 1;
 	min-width: 0;
 }
+.scrm-qcov-responses {
+	margin-top: 6px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
 .scrm-qcov-response {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
 	margin-top: 4px;
 	padding-left: 8px;
 	border-left: 2px solid var(--scrm-line);
+	color: var(--scrm-ink-3);
+}
+.scrm-qcov-response-meta {
+	font: 500 9.5px var(--scrm-mono);
+	color: var(--scrm-muted);
+	letter-spacing: 0.02em;
+	text-transform: uppercase;
+}
+.scrm-qcov-response-text {
 	font-size: 11px;
 	line-height: 1.45;
-	color: var(--scrm-ink-3);
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
+}
+.scrm-qcov-response-empty {
+	font-size: 11px;
+	font-style: italic;
+	color: var(--scrm-muted);
 }
 .scrm-cov {
 	font: 500 9px var(--scrm-mono);
