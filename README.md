@@ -1,5 +1,7 @@
 # Sales CRM (Obsidian plugin)
 
+![Sales CRM dashboard](assets/product-dashboard.png)
+
 A lightweight sales CRM that lives inside your Obsidian vault, built around two
 methodologies:
 
