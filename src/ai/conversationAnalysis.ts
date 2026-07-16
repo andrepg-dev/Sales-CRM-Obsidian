@@ -1,11 +1,11 @@
 import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import {
-	AnswerState,
-	BadDataFlag,
-	BadDataKind,
-	Commitment,
-	Outcome,
-	QuestionAnswer,
+  AnswerState,
+  BadDataFlag,
+  BadDataKind,
+  Commitment,
+  Outcome,
+  QuestionAnswer,
 } from "../types";
 import { detect } from "../util/detect";
 

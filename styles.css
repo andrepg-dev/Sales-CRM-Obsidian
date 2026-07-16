@@ -701,6 +701,10 @@
 .scrm-detail-idcol {
 	flex: 1;
 	min-width: 120px;
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 4px;
 }
 .scrm-detail-name {
 	font-size: 18px;
@@ -712,7 +716,6 @@
 }
 .scrm-detail-profile {
 	width: fit-content;
-	margin-top: 4px;
 }
 .scrm-detail-actions {
 	display: flex;
